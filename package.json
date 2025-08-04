@@ -5,12 +5,15 @@
   "type": "module",
   "main": "server/index.js",
   "scripts": {
+    "predev": "node scripts/cleanup-ports.js",
     "dev": "concurrently --kill-others \"npm run server\" \"npm run client\"",
+    "start-dev": "node scripts/start-dev.js",
     "server": "node server/index.js",
     "client": "vite --host",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "npm run build && npm run server"
+    "start": "npm run build && npm run server",
+    "cleanup": "node scripts/cleanup-ports.js"
   },
   "keywords": [
     "amazon-q",

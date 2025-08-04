@@ -38,11 +38,17 @@ cp .env.example .env
 
 4. **Start the application:**
 ```bash
-# Development mode (with hot reload)
+# Development mode (with automatic cleanup and hot reload)
 npm run dev
+
+# Alternative: Use the enhanced start script
+npm run start-dev
+
+# Manual cleanup if needed
+npm run cleanup
 ```
 
-The application will start at the port specified in your .env file (default: http://localhost:3001)
+The application will automatically clean up any conflicting processes and start at the port specified in your .env file (default: http://localhost:3001)
 
 ## Usage
 
