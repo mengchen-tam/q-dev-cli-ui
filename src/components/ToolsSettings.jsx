@@ -99,22 +99,11 @@ function ToolsSettings({ isOpen, onClose }) {
         }
       }
       
-      // Fallback to direct config reading
-      const response = await fetch('/api/mcp/servers?scope=user', {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        const data = await response.json();
-        setMcpServers(data.servers || []);
-      } else {
-        console.error('Failed to fetch MCP servers');
-      }
+      // If no servers found, initialize empty array
+      setMcpServers([]);
     } catch (error) {
       console.error('Error fetching MCP servers:', error);
+      setMcpServers([]);
     }
   };
 
