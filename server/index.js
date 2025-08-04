@@ -37,7 +37,6 @@ import fetch from 'node-fetch';
 import mime from 'mime-types';
 
 import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache } from './projects.js';
-import { spawnQ, abortQSession } from './q-cli.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
@@ -443,50 +442,23 @@ wss.on('connection', (ws, request) => {
   
   if (pathname === '/shell') {
     handleShellConnection(ws);
-  } else if (pathname === '/ws') {
-    handleChatConnection(ws);
+  } else if (pathname === '/projects') {
+    handleProjectsConnection(ws);
   } else {
     console.log('❌ Unknown WebSocket path:', pathname);
     ws.close();
   }
 });
 
-// Handle chat WebSocket connections
-function handleChatConnection(ws) {
-  console.log('💬 Chat WebSocket connected');
+// Handle projects WebSocket connections for real-time updates
+function handleProjectsConnection(ws) {
+  console.log('📁 Projects WebSocket connected');
   
   // Add to connected clients for project updates
   connectedClients.add(ws);
   
-  ws.on('message', async (message) => {
-    try {
-      const data = JSON.parse(message);
-      
-      if (data.type === 'q-command') {
-        console.log('💬 User message:', data.command || '[Continue/Resume]');
-        console.log('📁 Project:', data.options?.projectPath || 'Unknown');
-        console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-        await spawnQ(data.command, data.options, ws);
-      } else if (data.type === 'abort-session') {
-        console.log('🛑 Abort session request:', data.sessionId);
-        const success = abortQSession(data.sessionId);
-        ws.send(JSON.stringify({
-          type: 'session-aborted',
-          sessionId: data.sessionId,
-          success
-        }));
-      }
-    } catch (error) {
-      console.error('❌ Chat WebSocket error:', error.message);
-      ws.send(JSON.stringify({
-        type: 'error',
-        error: error.message
-      }));
-    }
-  });
-  
   ws.on('close', () => {
-    console.log('🔌 Chat client disconnected');
+    console.log('🔌 Projects client disconnected');
     // Remove from connected clients
     connectedClients.delete(ws);
   });

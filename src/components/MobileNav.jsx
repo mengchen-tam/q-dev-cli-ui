@@ -1,15 +1,10 @@
 import React from 'react';
-import { MessageSquare, Folder, Terminal, GitBranch, Globe } from 'lucide-react';
+import { Folder, Terminal, GitBranch } from 'lucide-react';
 
 function MobileNav({ activeTab, setActiveTab, isInputFocused }) {
   // Detect dark mode
   const isDarkMode = document.documentElement.classList.contains('dark');
   const navItems = [
-    {
-      id: 'chat',
-      icon: MessageSquare,
-      onClick: () => setActiveTab('chat')
-    },
     {
       id: 'shell',
       icon: Terminal,

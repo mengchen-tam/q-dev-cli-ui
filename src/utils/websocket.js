@@ -54,13 +54,13 @@ export function useWebSocket() {
         wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
       }
       
-      // Include token in WebSocket URL as query parameter if available
-      let wsUrl = `${wsBaseUrl}/ws`;
+      // Connect to projects WebSocket endpoint for project updates
+      let wsUrl = `${wsBaseUrl}/projects`;
       if (token) {
         wsUrl += `?token=${encodeURIComponent(token)}`;
       }
       
-      console.log('Connecting to WebSocket:', wsUrl);
+      console.log('Connecting to Projects WebSocket:', wsUrl);
       const websocket = new WebSocket(wsUrl);
 
       websocket.onopen = () => {

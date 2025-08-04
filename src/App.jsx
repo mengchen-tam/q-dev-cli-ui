@@ -1,30 +1,16 @@
 /*
- * App.jsx - Main Application Component with Session Protection System
+ * App.jsx - Main Application Component
  * 
- * SESSION PROTECTION SYSTEM OVERVIEW:
- * ===================================
- * 
- * Problem: Automatic project updates from WebSocket would refresh the sidebar and clear chat messages
- * during active conversations, creating a poor user experience.
- * 
- * Solution: Track "active sessions" and pause project updates during conversations.
- * 
- * How it works:
- * 1. When user sends message → session marked as "active" 
- * 2. Project updates are skipped while session is active
- * 3. When conversation completes/aborts → session marked as "inactive"
- * 4. Project updates resume normally
- * 
- * Handles both existing sessions (with real IDs) and new sessions (with temporary IDs).
+ * Main application component for Q Developer WebUI
+ * Handles project management, file operations, and shell integration
  */
 
 import React, { useState, useEffect } from 'react';
-import { BrowserRouter as Router, Routes, Route, useNavigate, useParams } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, useNavigate } from 'react-router-dom';
 import Sidebar from './components/Sidebar';
 import MainContent from './components/MainContent';
 import MobileNav from './components/MobileNav';
 import ToolsSettings from './components/ToolsSettings';
-import QuickSettingsPanel from './components/QuickSettingsPanel';
 
 import { useWebSocket } from './utils/websocket';
 import { ThemeProvider } from './contexts/ThemeContext';
@@ -33,46 +19,21 @@ import ProtectedRoute from './components/ProtectedRoute';
 import { useVersionCheck } from './hooks/useVersionCheck';
 import { api } from './utils/api';
 
-
 // Main App component with routing
 function AppContent() {
   const navigate = useNavigate();
-  const { sessionId } = useParams();
   
-  const { updateAvailable, latestVersion, currentVersion } = useVersionCheck('siteboon', 'claudecodeui');
+  const { updateAvailable, latestVersion, currentVersion } = useVersionCheck('mengchen-tam', 'q-dev-cli-ui');
   const [showVersionModal, setShowVersionModal] = useState(false);
   
   const [projects, setProjects] = useState([]);
   const [selectedProject, setSelectedProject] = useState(null);
-  const [selectedSession, setSelectedSession] = useState(null);
-  const [activeTab, setActiveTab] = useState('chat'); // 'chat' or 'files'
+  const [activeTab, setActiveTab] = useState('shell'); // 'shell', 'files', or 'git'
   const [isMobile, setIsMobile] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
-  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(false);
   const [isInputFocused, setIsInputFocused] = useState(false);
   const [showToolsSettings, setShowToolsSettings] = useState(false);
-  const [showQuickSettings, setShowQuickSettings] = useState(false);
-  const [autoExpandTools, setAutoExpandTools] = useState(() => {
-    const saved = localStorage.getItem('autoExpandTools');
-    return saved !== null ? JSON.parse(saved) : false;
-  });
-  const [showRawParameters, setShowRawParameters] = useState(() => {
-    const saved = localStorage.getItem('showRawParameters');
-    return saved !== null ? JSON.parse(saved) : false;
-  });
-  const [autoScrollToBottom, setAutoScrollToBottom] = useState(() => {
-    const saved = localStorage.getItem('autoScrollToBottom');
-    return saved !== null ? JSON.parse(saved) : true;
-  });
-  const [sendByCtrlEnter, setSendByCtrlEnter] = useState(() => {
-    const saved = localStorage.getItem('sendByCtrlEnter');
-    return saved !== null ? JSON.parse(saved) : false;
-  });
-  // Session Protection System: Track sessions with active conversations to prevent
-  // automatic project updates from interrupting ongoing chats. When a user sends
-  // a message, the session is marked as "active" and project updates are paused
-  // until the conversation completes or is aborted.
-  const [activeSessions, setActiveSessions] = useState(new Set()); // Track sessions with active conversations
   
   const { ws, sendMessage, messages } = useWebSocket();
 
@@ -92,75 +53,12 @@ function AppContent() {
     fetchProjects();
   }, []);
 
-  // Helper function to determine if an update is purely additive (new sessions/projects)
-  // vs modifying existing selected items that would interfere with active conversations
-  const isUpdateAdditive = (currentProjects, updatedProjects, selectedProject, selectedSession) => {
-    if (!selectedProject || !selectedSession) {
-      // No active session to protect, allow all updates
-      return true;
-    }
-
-    // Find the selected project in both current and updated data
-    const currentSelectedProject = currentProjects?.find(p => p.name === selectedProject.name);
-    const updatedSelectedProject = updatedProjects?.find(p => p.name === selectedProject.name);
-
-    if (!currentSelectedProject || !updatedSelectedProject) {
-      // Project structure changed significantly, not purely additive
-      return false;
-    }
-
-    // Find the selected session in both current and updated project data
-    const currentSelectedSession = currentSelectedProject.sessions?.find(s => s.id === selectedSession.id);
-    const updatedSelectedSession = updatedSelectedProject.sessions?.find(s => s.id === selectedSession.id);
-
-    if (!currentSelectedSession || !updatedSelectedSession) {
-      // Selected session was deleted or significantly changed, not purely additive
-      return false;
-    }
-
-    // Check if the selected session's content has changed (modification vs addition)
-    // Compare key fields that would affect the loaded chat interface
-    const sessionUnchanged = 
-      currentSelectedSession.id === updatedSelectedSession.id &&
-      currentSelectedSession.title === updatedSelectedSession.title &&
-      currentSelectedSession.created_at === updatedSelectedSession.created_at &&
-      currentSelectedSession.updated_at === updatedSelectedSession.updated_at;
-
-    // This is considered additive if the selected session is unchanged
-    // (new sessions may have been added elsewhere, but active session is protected)
-    return sessionUnchanged;
-  };
-
   // Handle WebSocket messages for real-time project updates
   useEffect(() => {
     if (messages.length > 0) {
       const latestMessage = messages[messages.length - 1];
       
       if (latestMessage.type === 'projects_updated') {
-        
-        // Session Protection Logic: Allow additions but prevent changes during active conversations
-        // This allows new sessions/projects to appear in sidebar while protecting active chat messages
-        // We check for two types of active sessions:
-        // 1. Existing sessions: selectedSession.id exists in activeSessions
-        // 2. New sessions: temporary "new-session-*" identifiers in activeSessions (before real session ID is received)
-        const hasActiveSession = (selectedSession && activeSessions.has(selectedSession.id)) ||
-                                 (activeSessions.size > 0 && Array.from(activeSessions).some(id => id.startsWith('new-session-')));
-        
-        if (hasActiveSession) {
-          // Allow updates but be selective: permit additions, prevent changes to existing items
-          const updatedProjects = latestMessage.projects;
-          const currentProjects = projects;
-          
-          // Check if this is purely additive (new sessions/projects) vs modification of existing ones
-          const isAdditiveUpdate = isUpdateAdditive(currentProjects, updatedProjects, selectedProject, selectedSession);
-          
-          if (!isAdditiveUpdate) {
-            // Skip updates that would modify existing selected session/project
-            return;
-          }
-          // Continue with additive updates below
-        }
-        
         // Update projects state with the new data from WebSocket
         const updatedProjects = latestMessage.projects;
         setProjects(updatedProjects);
@@ -170,21 +68,11 @@ function AppContent() {
           const updatedSelectedProject = updatedProjects.find(p => p.name === selectedProject.name);
           if (updatedSelectedProject) {
             setSelectedProject(updatedSelectedProject);
-            
-            // Update selected session only if it was deleted - avoid unnecessary reloads
-            if (selectedSession) {
-              const updatedSelectedSession = updatedSelectedProject.sessions?.find(s => s.id === selectedSession.id);
-              if (!updatedSelectedSession) {
-                // Session was deleted
-                setSelectedSession(null);
-              }
-              // Don't update if session still exists with same ID - prevents reload
-            }
           }
         }
       }
     }
-  }, [messages, selectedProject, selectedSession, activeSessions]);
+  }, [messages, selectedProject]);
 
   const fetchProjects = async () => {
     try {
@@ -209,8 +97,7 @@ function AppContent() {
             newProject.name !== prevProject.name ||
             newProject.displayName !== prevProject.displayName ||
             newProject.fullPath !== prevProject.fullPath ||
-            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta) ||
-            JSON.stringify(newProject.sessions) !== JSON.stringify(prevProject.sessions)
+            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta)
           );
         }) || data.length !== prevProjects.length;
         
@@ -218,7 +105,6 @@ function AppContent() {
         return hasChanges ? data : prevProjects;
       });
       
-      // Don't auto-select any project - user should choose manually
     } catch (error) {
       console.error('Error fetching projects:', error);
     } finally {
@@ -229,87 +115,16 @@ function AppContent() {
   // Expose fetchProjects globally for component access
   window.refreshProjects = fetchProjects;
 
-  // Handle URL-based session loading
-  useEffect(() => {
-    if (sessionId && projects.length > 0) {
-      // Only switch tabs on initial load, not on every project update
-      const shouldSwitchTab = !selectedSession || selectedSession.id !== sessionId;
-      // Find the session across all projects
-      for (const project of projects) {
-        const session = project.sessions?.find(s => s.id === sessionId);
-        if (session) {
-          setSelectedProject(project);
-          setSelectedSession(session);
-          // Only switch to chat tab if we're loading a different session
-          if (shouldSwitchTab) {
-            setActiveTab('chat');
-          }
-          return;
-        }
-      }
-      
-      // If session not found, it might be a newly created session
-      // Just navigate to it and it will be found when the sidebar refreshes
-      // Don't redirect to home, let the session load naturally
-    }
-  }, [sessionId, projects, navigate]);
-
   const handleProjectSelect = (project) => {
     setSelectedProject(project);
-    setSelectedSession(null);
     navigate('/');
     if (isMobile) {
       setSidebarOpen(false);
     }
   };
-
-  const handleSessionSelect = (session) => {
-    setSelectedSession(session);
-    // Only switch to chat tab when user explicitly selects a session
-    // This prevents tab switching during automatic updates
-    if (activeTab !== 'git' && activeTab !== 'preview') {
-      setActiveTab('chat');
-    }
-    if (isMobile) {
-      setSidebarOpen(false);
-    }
-    navigate(`/session/${session.id}`);
-  };
-
-  const handleNewSession = (project) => {
-    setSelectedProject(project);
-    setSelectedSession(null);
-    setActiveTab('chat');
-    navigate('/');
-    if (isMobile) {
-      setSidebarOpen(false);
-    }
-  };
-
-  const handleSessionDelete = (sessionId) => {
-    // If the deleted session was currently selected, clear it
-    if (selectedSession?.id === sessionId) {
-      setSelectedSession(null);
-      navigate('/');
-    }
-    
-    // Update projects state locally instead of full refresh
-    setProjects(prevProjects => 
-      prevProjects.map(project => ({
-        ...project,
-        sessions: project.sessions?.filter(session => session.id !== sessionId) || [],
-        sessionMeta: {
-          ...project.sessionMeta,
-          total: Math.max(0, (project.sessionMeta?.total || 0) - 1)
-        }
-      }))
-    );
-  };
-
-
 
   const handleSidebarRefresh = async () => {
-    // Refresh only the sessions for all projects, don't change selected state
+    // Refresh projects
     try {
       const response = await api.projects();
       const freshProjects = await response.json();
@@ -325,8 +140,7 @@ function AppContent() {
             newProject.name !== prevProject.name ||
             newProject.displayName !== prevProject.displayName ||
             newProject.fullPath !== prevProject.fullPath ||
-            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta) ||
-            JSON.stringify(newProject.sessions) !== JSON.stringify(prevProject.sessions)
+            JSON.stringify(newProject.sessionMeta) !== JSON.stringify(prevProject.sessionMeta)
           );
         }) || freshProjects.length !== prevProjects.length;
         
@@ -341,14 +155,6 @@ function AppContent() {
           if (JSON.stringify(refreshedProject) !== JSON.stringify(selectedProject)) {
             setSelectedProject(refreshedProject);
           }
-          
-          // If we have a selected session, try to find it in the refreshed project
-          if (selectedSession) {
-            const refreshedSession = refreshedProject.sessions?.find(s => s.id === selectedSession.id);
-            if (refreshedSession && JSON.stringify(refreshedSession) !== JSON.stringify(selectedSession)) {
-              setSelectedSession(refreshedSession);
-            }
-          }
         }
       }
     } catch (error) {
@@ -360,7 +166,6 @@ function AppContent() {
     // If the deleted project was currently selected, clear it
     if (selectedProject?.name === projectName) {
       setSelectedProject(null);
-      setSelectedSession(null);
       navigate('/');
     }
     
@@ -368,46 +173,6 @@ function AppContent() {
     setProjects(prevProjects => 
       prevProjects.filter(project => project.name !== projectName)
     );
-  };
-
-  // Session Protection Functions: Manage the lifecycle of active sessions
-  
-  // markSessionAsActive: Called when user sends a message to mark session as protected
-  // This includes both real session IDs and temporary "new-session-*" identifiers
-  const markSessionAsActive = (sessionId) => {
-    if (sessionId) {
-      setActiveSessions(prev => new Set([...prev, sessionId]));
-    }
-  };
-
-  // markSessionAsInactive: Called when conversation completes/aborts to re-enable project updates
-  const markSessionAsInactive = (sessionId) => {
-    if (sessionId) {
-      setActiveSessions(prev => {
-        const newSet = new Set(prev);
-        newSet.delete(sessionId);
-        return newSet;
-      });
-    }
-  };
-
-  // replaceTemporarySession: Called when WebSocket provides real session ID for new sessions
-  // Removes temporary "new-session-*" identifiers and adds the real session ID
-  // This maintains protection continuity during the transition from temporary to real session
-  const replaceTemporarySession = (realSessionId) => {
-    if (realSessionId) {
-      setActiveSessions(prev => {
-        const newSet = new Set();
-        // Keep all non-temporary sessions and add the real session ID
-        for (const sessionId of prev) {
-          if (!sessionId.startsWith('new-session-')) {
-            newSet.add(sessionId);
-          }
-        }
-        newSet.add(realSessionId);
-        return newSet;
-      });
-    }
   };
 
   // Version Upgrade Modal Component
@@ -468,7 +233,7 @@ function AppContent() {
               </code>
             </div>
             <p className="text-xs text-gray-600 dark:text-gray-400">
-              Run this command in your Claude Code UI directory to update to the latest version.
+              Run this command in your Q Developer WebUI directory to update to the latest version.
             </p>
           </div>
 
@@ -505,11 +270,7 @@ function AppContent() {
             <Sidebar
               projects={projects}
               selectedProject={selectedProject}
-              selectedSession={selectedSession}
               onProjectSelect={handleProjectSelect}
-              onSessionSelect={handleSessionSelect}
-              onNewSession={handleNewSession}
-              onSessionDelete={handleSessionDelete}
               onProjectDelete={handleProjectDelete}
               isLoading={isLoadingProjects}
               onRefresh={handleSidebarRefresh}
@@ -550,11 +311,7 @@ function AppContent() {
             <Sidebar
               projects={projects}
               selectedProject={selectedProject}
-              selectedSession={selectedSession}
               onProjectSelect={handleProjectSelect}
-              onSessionSelect={handleSessionSelect}
-              onNewSession={handleNewSession}
-              onSessionDelete={handleSessionDelete}
               onProjectDelete={handleProjectDelete}
               isLoading={isLoadingProjects}
               onRefresh={handleSidebarRefresh}
@@ -572,7 +329,6 @@ function AppContent() {
       <div className="flex-1 flex flex-col min-w-0">
         <MainContent
           selectedProject={selectedProject}
-          selectedSession={selectedSession}
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           ws={ws}
@@ -582,15 +338,7 @@ function AppContent() {
           onMenuClick={() => setSidebarOpen(true)}
           isLoading={isLoadingProjects}
           onInputFocusChange={setIsInputFocused}
-          onSessionActive={markSessionAsActive}
-          onSessionInactive={markSessionAsInactive}
-          onReplaceTemporarySession={replaceTemporarySession}
-          onNavigateToSession={(sessionId) => navigate(`/session/${sessionId}`)}
           onShowSettings={() => setShowToolsSettings(true)}
-          autoExpandTools={autoExpandTools}
-          showRawParameters={showRawParameters}
-          autoScrollToBottom={autoScrollToBottom}
-          sendByCtrlEnter={sendByCtrlEnter}
         />
       </div>
 
@@ -600,34 +348,6 @@ function AppContent() {
           activeTab={activeTab}
           setActiveTab={setActiveTab}
           isInputFocused={isInputFocused}
-        />
-      )}
-      {/* Quick Settings Panel - Only show on chat tab */}
-      {activeTab === 'chat' && (
-        <QuickSettingsPanel
-          isOpen={showQuickSettings}
-          onToggle={setShowQuickSettings}
-          autoExpandTools={autoExpandTools}
-          onAutoExpandChange={(value) => {
-            setAutoExpandTools(value);
-            localStorage.setItem('autoExpandTools', JSON.stringify(value));
-          }}
-          showRawParameters={showRawParameters}
-          onShowRawParametersChange={(value) => {
-            setShowRawParameters(value);
-            localStorage.setItem('showRawParameters', JSON.stringify(value));
-          }}
-          autoScrollToBottom={autoScrollToBottom}
-          onAutoScrollChange={(value) => {
-            setAutoScrollToBottom(value);
-            localStorage.setItem('autoScrollToBottom', JSON.stringify(value));
-          }}
-          sendByCtrlEnter={sendByCtrlEnter}
-          onSendByCtrlEnterChange={(value) => {
-            setSendByCtrlEnter(value);
-            localStorage.setItem('sendByCtrlEnter', JSON.stringify(value));
-          }}
-          isMobile={isMobile}
         />
       )}
 
@@ -652,7 +372,6 @@ function App() {
           <Router>
             <Routes>
               <Route path="/" element={<AppContent />} />
-              <Route path="/session/:sessionId" element={<AppContent />} />
             </Routes>
           </Router>
         </ProtectedRoute>
