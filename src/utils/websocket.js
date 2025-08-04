@@ -21,20 +21,19 @@ export function useWebSocket() {
 
   const connect = async () => {
     try {
-      // Get authentication token
+      // Get authentication token (optional)
       const token = localStorage.getItem('auth-token');
-      if (!token) {
-        console.warn('No authentication token found for WebSocket connection');
-        return;
-      }
       
       // Fetch server configuration to get the correct WebSocket URL
       let wsBaseUrl;
       try {
+        const headers = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        
         const configResponse = await fetch('/api/config', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
+          headers: headers
         });
         const config = await configResponse.json();
         wsBaseUrl = config.wsUrl;
@@ -55,8 +54,13 @@ export function useWebSocket() {
         wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
       }
       
-      // Include token in WebSocket URL as query parameter
-      const wsUrl = `${wsBaseUrl}/ws?token=${encodeURIComponent(token)}`;
+      // Include token in WebSocket URL as query parameter if available
+      let wsUrl = `${wsBaseUrl}/ws`;
+      if (token) {
+        wsUrl += `?token=${encodeURIComponent(token)}`;
+      }
+      
+      console.log('Connecting to WebSocket:', wsUrl);
       const websocket = new WebSocket(wsUrl);
 
       websocket.onopen = () => {

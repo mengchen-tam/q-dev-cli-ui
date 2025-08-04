@@ -20,6 +20,12 @@ const validateApiKey = (req, res, next) => {
 
 // JWT authentication middleware
 const authenticateToken = async (req, res, next) => {
+  // Skip authentication if REQUIRE_AUTH is false
+  if (process.env.REQUIRE_AUTH === 'false') {
+    req.user = { id: 1, username: 'test-user' }; // Mock user for testing
+    return next();
+  }
+
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1]; // Bearer TOKEN
 
@@ -58,6 +64,11 @@ const generateToken = (user) => {
 
 // WebSocket authentication function
 const authenticateWebSocket = (token) => {
+  // Skip authentication if REQUIRE_AUTH is false
+  if (process.env.REQUIRE_AUTH === 'false') {
+    return { id: 1, username: 'test-user' }; // Mock user for testing
+  }
+
   if (!token) {
     return null;
   }

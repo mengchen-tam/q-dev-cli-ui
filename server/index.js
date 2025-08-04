@@ -37,7 +37,7 @@ import fetch from 'node-fetch';
 import mime from 'mime-types';
 
 import { getProjects, getSessions, getSessionMessages, renameProject, deleteSession, deleteProject, addProjectManually, extractProjectDirectory, clearProjectDirectoryCache } from './projects.js';
-import { spawnClaude, abortClaudeSession } from './claude-cli.js';
+import { spawnQ, abortQSession } from './q-cli.js';
 import gitRoutes from './routes/git.js';
 import authRoutes from './routes/auth.js';
 import mcpRoutes from './routes/mcp.js';
@@ -48,10 +48,10 @@ import { validateApiKey, authenticateToken, authenticateWebSocket } from './midd
 let projectsWatcher = null;
 const connectedClients = new Set();
 
-// Setup file system watcher for Claude projects folder using chokidar
+// Setup file system watcher for Q Developer projects folder using chokidar
 async function setupProjectsWatcher() {
   const chokidar = (await import('chokidar')).default;
-  const claudeProjectsPath = path.join(process.env.HOME, '.claude', 'projects');
+  const qProjectsPath = path.join(process.env.HOME, '.q-developer', 'sessions');
   
   if (projectsWatcher) {
     projectsWatcher.close();
@@ -59,7 +59,7 @@ async function setupProjectsWatcher() {
   
   try {
     // Initialize chokidar watcher with optimized settings
-    projectsWatcher = chokidar.watch(claudeProjectsPath, {
+    projectsWatcher = chokidar.watch(qProjectsPath, {
       ignored: [
         '**/node_modules/**',
         '**/.git/**',
@@ -98,7 +98,7 @@ async function setupProjectsWatcher() {
             projects: updatedProjects,
             timestamp: new Date().toISOString(),
             changeType: eventType,
-            changedFile: path.relative(claudeProjectsPath, filePath)
+            changedFile: path.relative(qProjectsPath, filePath)
           });
           
           connectedClients.forEach(client => {
@@ -140,6 +140,13 @@ const wss = new WebSocketServer({
   server,
   verifyClient: (info) => {
     console.log('WebSocket connection attempt to:', info.req.url);
+    
+    // Skip authentication if REQUIRE_AUTH is false
+    if (process.env.REQUIRE_AUTH === 'false') {
+      info.req.user = { id: 1, username: 'test-user' };
+      console.log('✅ WebSocket authentication bypassed (auth disabled)');
+      return true;
+    }
     
     // Extract token from query parameters or headers
     const url = new URL(info.req.url, 'http://localhost');
@@ -455,14 +462,14 @@ function handleChatConnection(ws) {
     try {
       const data = JSON.parse(message);
       
-      if (data.type === 'claude-command') {
+      if (data.type === 'q-command') {
         console.log('💬 User message:', data.command || '[Continue/Resume]');
         console.log('📁 Project:', data.options?.projectPath || 'Unknown');
         console.log('🔄 Session:', data.options?.sessionId ? 'Resume' : 'New');
-        await spawnClaude(data.command, data.options, ws);
+        await spawnQ(data.command, data.options, ws);
       } else if (data.type === 'abort-session') {
         console.log('🛑 Abort session request:', data.sessionId);
-        const success = abortClaudeSession(data.sessionId);
+        const success = abortQSession(data.sessionId);
         ws.send(JSON.stringify({
           type: 'session-aborted',
           sessionId: data.sessionId,
@@ -504,10 +511,10 @@ function handleShellConnection(ws) {
         console.log('🚀 Starting shell in:', projectPath);
         console.log('📋 Session info:', hasSession ? `Resume session ${sessionId}` : 'New session');
         
-        // First send a welcome message
-        const welcomeMsg = hasSession ? 
-          `\x1b[36mResuming Claude session ${sessionId} in: ${projectPath}\x1b[0m\r\n` :
-          `\x1b[36mStarting new Claude session in: ${projectPath}\x1b[0m\r\n`;
+        // First send a welcome message with usage instructions
+        const welcomeMsg = `\x1b[36mQ Developer Shell started in: ${projectPath}\x1b[0m\r\n` +
+          `\x1b[33mUsage: q chat "your message here"\x1b[0m\r\n` +
+          `\x1b[33mOr use: q chat (for interactive mode)\x1b[0m\r\n\r\n`;
         
         ws.send(JSON.stringify({
           type: 'output',
@@ -515,30 +522,21 @@ function handleShellConnection(ws) {
         }));
         
         try {
-          // Build shell command that changes to project directory first, then runs claude
-          let claudeCommand = 'claude';
-          
-          if (hasSession && sessionId) {
-            // Try to resume session, but with fallback to new session if it fails
-            claudeCommand = `claude --resume ${sessionId} || claude`;
-          }
-          
-          // Create shell command that cds to the project directory first
-          const shellCommand = `cd "${projectPath}" && ${claudeCommand}`;
-          
-          console.log('🔧 Executing shell command:', shellCommand);
+          // Start interactive bash shell in the project directory
+          console.log('🔧 Starting bash shell in:', projectPath);
           
           // Start shell using PTY for proper terminal emulation
-          shellProcess = pty.spawn('bash', ['-c', shellCommand], {
+          shellProcess = pty.spawn('bash', ['-l'], {
             name: 'xterm-256color',
-            cols: 80,
-            rows: 24,
-            cwd: process.env.HOME || '/', // Start from home directory
+            cols: data.cols || 80,
+            rows: data.rows || 24,
+            cwd: projectPath, // Start directly in project directory
             env: { 
               ...process.env,
               TERM: 'xterm-256color',
               COLORTERM: 'truecolor',
               FORCE_COLOR: '3',
+              PS1: '\\u@\\h: \\w$ ', // Set a simple prompt
               // Override browser opening commands to echo URL for detection
               BROWSER: 'echo "OPEN_URL:"'
             }
@@ -813,7 +811,7 @@ app.post('/api/projects/:projectName/upload-images', authenticateToken, async (r
     // Configure multer for image uploads
     const storage = multer.diskStorage({
       destination: async (req, file, cb) => {
-        const uploadDir = path.join(os.tmpdir(), 'claude-ui-uploads', String(req.user.id));
+        const uploadDir = path.join(os.tmpdir(), 'q-developer-uploads', String(req.user.id));
         await fs.mkdir(uploadDir, { recursive: true });
         cb(null, uploadDir);
       },
@@ -988,7 +986,7 @@ async function startServer() {
     console.log('✅ Database initialization skipped (testing)');
     
     server.listen(PORT, '0.0.0.0', async () => {
-      console.log(`Claude Code UI server running on http://0.0.0.0:${PORT}`);
+      console.log(`Q Developer WebUI server running on http://0.0.0.0:${PORT}`);
       
       // Start watching the projects folder for changes
       await setupProjectsWatcher(); // Re-enabled with better-sqlite3

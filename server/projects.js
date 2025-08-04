@@ -2,6 +2,7 @@ import { promises as fs } from 'fs';
 import fsSync from 'fs';
 import path from 'path';
 import readline from 'readline';
+import os from 'os';
 
 // Cache for extracted project directories
 const projectDirectoryCache = new Map();
@@ -13,9 +14,9 @@ function clearProjectDirectoryCache() {
   cacheTimestamp = Date.now();
 }
 
-// Load project configuration file
+// Load project configuration file for Q Developer
 async function loadProjectConfig() {
-  const configPath = path.join(process.env.HOME, '.claude', 'project-config.json');
+  const configPath = path.join(process.env.HOME, '.q-developer', 'project-config.json');
   try {
     const configData = await fs.readFile(configPath, 'utf8');
     return JSON.parse(configData);
@@ -25,16 +26,25 @@ async function loadProjectConfig() {
   }
 }
 
-// Save project configuration file
+// Save project configuration file for Q Developer
 async function saveProjectConfig(config) {
-  const configPath = path.join(process.env.HOME, '.claude', 'project-config.json');
+  const configDir = path.join(process.env.HOME, '.q-developer');
+  const configPath = path.join(configDir, 'project-config.json');
+  
+  // Ensure directory exists
+  try {
+    await fs.mkdir(configDir, { recursive: true });
+  } catch (error) {
+    // Directory might already exist
+  }
+  
   await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
 }
 
 // Generate better display name from path
 async function generateDisplayName(projectName, actualProjectDir = null) {
-  // Use actual project directory if provided, otherwise decode from project name
-  let projectPath = actualProjectDir || projectName.replace(/-/g, '/');
+  // Use actual project directory if provided, otherwise use project name directly
+  let projectPath = actualProjectDir || projectName;
   
   // Try to read package.json from the project path
   try {
@@ -50,562 +60,416 @@ async function generateDisplayName(projectName, actualProjectDir = null) {
     // Fall back to path-based naming if package.json doesn't exist or can't be read
   }
   
-  // If it starts with /, it's an absolute path
-  if (projectPath.startsWith('/')) {
-    const parts = projectPath.split('/').filter(Boolean);
-    // Return only the last folder name
-    return parts[parts.length - 1] || projectPath;
-  }
-  
-  return projectPath;
-}
-
-// Extract the actual project directory from JSONL sessions (with caching)
-async function extractProjectDirectory(projectName) {
-  // Check cache first
-  if (projectDirectoryCache.has(projectName)) {
-    return projectDirectoryCache.get(projectName);
-  }
-  
-  
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
-  const cwdCounts = new Map();
-  let latestTimestamp = 0;
-  let latestCwd = null;
-  let extractedPath;
-  
+  // Try to read README.md for project title
   try {
-    const files = await fs.readdir(projectDir);
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+    const readmePath = path.join(projectPath, 'README.md');
+    const readmeData = await fs.readFile(readmePath, 'utf8');
+    const lines = readmeData.split('\n');
     
-    if (jsonlFiles.length === 0) {
-      // Fall back to decoded project name if no sessions
-      extractedPath = projectName.replace(/-/g, '/');
-    } else {
-      // Process all JSONL files to collect cwd values
-      for (const file of jsonlFiles) {
-        const jsonlFile = path.join(projectDir, file);
-        const fileStream = fsSync.createReadStream(jsonlFile);
-        const rl = readline.createInterface({
-          input: fileStream,
-          crlfDelay: Infinity
-        });
-        
-        for await (const line of rl) {
-          if (line.trim()) {
-            try {
-              const entry = JSON.parse(line);
-              
-              if (entry.cwd) {
-                // Count occurrences of each cwd
-                cwdCounts.set(entry.cwd, (cwdCounts.get(entry.cwd) || 0) + 1);
-                
-                // Track the most recent cwd
-                const timestamp = new Date(entry.timestamp || 0).getTime();
-                if (timestamp > latestTimestamp) {
-                  latestTimestamp = timestamp;
-                  latestCwd = entry.cwd;
-                }
-              }
-            } catch (parseError) {
-              // Skip malformed lines
-            }
-          }
-        }
-      }
-      
-      // Determine the best cwd to use
-      if (cwdCounts.size === 0) {
-        // No cwd found, fall back to decoded project name
-        extractedPath = projectName.replace(/-/g, '/');
-      } else if (cwdCounts.size === 1) {
-        // Only one cwd, use it
-        extractedPath = Array.from(cwdCounts.keys())[0];
-      } else {
-        // Multiple cwd values - prefer the most recent one if it has reasonable usage
-        const mostRecentCount = cwdCounts.get(latestCwd) || 0;
-        const maxCount = Math.max(...cwdCounts.values());
-        
-        // Use most recent if it has at least 25% of the max count
-        if (mostRecentCount >= maxCount * 0.25) {
-          extractedPath = latestCwd;
-        } else {
-          // Otherwise use the most frequently used cwd
-          for (const [cwd, count] of cwdCounts.entries()) {
-            if (count === maxCount) {
-              extractedPath = cwd;
-              break;
-            }
-          }
-        }
-        
-        // Fallback (shouldn't reach here)
-        if (!extractedPath) {
-          extractedPath = latestCwd || projectName.replace(/-/g, '/');
-        }
+    // Look for the first heading
+    for (const line of lines) {
+      const match = line.match(/^#\s+(.+)$/);
+      if (match) {
+        return match[1].trim();
       }
     }
-    
-    // Cache the result
-    projectDirectoryCache.set(projectName, extractedPath);
-    
-    return extractedPath;
-    
   } catch (error) {
-    console.error(`Error extracting project directory for ${projectName}:`, error);
-    // Fall back to decoded project name
-    extractedPath = projectName.replace(/-/g, '/');
-    
-    // Cache the fallback result too
-    projectDirectoryCache.set(projectName, extractedPath);
-    
-    return extractedPath;
+    // Fall back if README doesn't exist
   }
+  
+  // Fall back to directory name
+  return path.basename(projectPath);
 }
 
+// Get Q Developer projects by scanning common project directories
 async function getProjects() {
-  const claudeDir = path.join(process.env.HOME, '.claude', 'projects');
-  const config = await loadProjectConfig();
-  const projects = [];
-  const existingProjects = new Set();
-  
   try {
-    // First, get existing projects from the file system
-    const entries = await fs.readdir(claudeDir, { withFileTypes: true });
+    const projects = [];
+    const config = await loadProjectConfig();
     
-    for (const entry of entries) {
-      if (entry.isDirectory()) {
-        existingProjects.add(entry.name);
-        const projectPath = path.join(claudeDir, entry.name);
-        
-        // Extract actual project directory from JSONL sessions
-        const actualProjectDir = await extractProjectDirectory(entry.name);
-        
-        // Get display name from config or generate one
-        const customName = config[entry.name]?.displayName;
-        const autoDisplayName = await generateDisplayName(entry.name, actualProjectDir);
-        const fullPath = actualProjectDir;
-        
-        const project = {
-          name: entry.name,
-          path: actualProjectDir,
-          displayName: customName || autoDisplayName,
-          fullPath: fullPath,
-          isCustomName: !!customName,
-          sessions: []
-        };
-        
-        // Try to get sessions for this project (just first 5 for performance)
-        try {
-          const sessionResult = await getSessions(entry.name, 5, 0);
-          project.sessions = sessionResult.sessions || [];
-          project.sessionMeta = {
-            hasMore: sessionResult.hasMore,
-            total: sessionResult.total
-          };
-        } catch (e) {
-          console.warn(`Could not load sessions for project ${entry.name}:`, e.message);
-        }
-        
-        projects.push(project);
-      }
-    }
-  } catch (error) {
-    console.error('Error reading projects directory:', error);
-  }
-  
-  // Add manually configured projects that don't exist as folders yet
-  for (const [projectName, projectConfig] of Object.entries(config)) {
-    if (!existingProjects.has(projectName) && projectConfig.manuallyAdded) {
-      // Use the original path if available, otherwise extract from potential sessions
-      let actualProjectDir = projectConfig.originalPath;
-      
-      if (!actualProjectDir) {
-        try {
-          actualProjectDir = await extractProjectDirectory(projectName);
-        } catch (error) {
-          // Fall back to decoded project name
-          actualProjectDir = projectName.replace(/-/g, '/');
-        }
-      }
-      
-              const project = {
-          name: projectName,
-          path: actualProjectDir,
-          displayName: projectConfig.displayName || await generateDisplayName(projectName, actualProjectDir),
-          fullPath: actualProjectDir,
-          isCustomName: !!projectConfig.displayName,
-          isManuallyAdded: true,
-          sessions: []
-        };
-      
-      projects.push(project);
-    }
-  }
-  
-  return projects;
-}
-
-async function getSessions(projectName, limit = 5, offset = 0) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
-  
-  try {
-    const files = await fs.readdir(projectDir);
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+    // Define common project directories to scan
+    const projectDirs = [
+      path.join(os.homedir(), 'projects'),
+      path.join(os.homedir(), 'workspace'),
+      path.join(os.homedir(), 'dev'),
+      path.join(os.homedir(), 'code'),
+      path.join(os.homedir(), 'Documents', 'projects'),
+      os.homedir() // Also scan home directory for immediate subdirectories
+    ];
     
-    if (jsonlFiles.length === 0) {
-      return { sessions: [], hasMore: false, total: 0 };
+    // Add manually configured project directories
+    if (config.additionalProjectDirs) {
+      projectDirs.push(...config.additionalProjectDirs);
     }
     
-    // For performance, get file stats to sort by modification time
-    const filesWithStats = await Promise.all(
-      jsonlFiles.map(async (file) => {
-        const filePath = path.join(projectDir, file);
-        const stats = await fs.stat(filePath);
-        return { file, mtime: stats.mtime };
-      })
-    );
+    const foundProjects = new Set();
     
-    // Sort files by modification time (newest first) for better performance
-    filesWithStats.sort((a, b) => b.mtime - a.mtime);
-    
-    const allSessions = new Map();
-    let processedCount = 0;
-    
-    // Process files in order of modification time
-    for (const { file } of filesWithStats) {
-      const jsonlFile = path.join(projectDir, file);
-      const sessions = await parseJsonlSessions(jsonlFile);
-      
-      // Merge sessions, avoiding duplicates by session ID
-      sessions.forEach(session => {
-        if (!allSessions.has(session.id)) {
-          allSessions.set(session.id, session);
-        }
-      });
-      
-      processedCount++;
-      
-      // Early exit optimization: if we have enough sessions and processed recent files
-      if (allSessions.size >= (limit + offset) * 2 && processedCount >= Math.min(3, filesWithStats.length)) {
-        break;
-      }
-    }
-    
-    // Convert to array and sort by last activity
-    const sortedSessions = Array.from(allSessions.values()).sort((a, b) => 
-      new Date(b.lastActivity) - new Date(a.lastActivity)
-    );
-    
-    const total = sortedSessions.length;
-    const paginatedSessions = sortedSessions.slice(offset, offset + limit);
-    const hasMore = offset + limit < total;
-    
-    return {
-      sessions: paginatedSessions,
-      hasMore,
-      total,
-      offset,
-      limit
-    };
-  } catch (error) {
-    console.error(`Error reading sessions for project ${projectName}:`, error);
-    return { sessions: [], hasMore: false, total: 0 };
-  }
-}
-
-async function parseJsonlSessions(filePath) {
-  const sessions = new Map();
-  
-  try {
-    const fileStream = fsSync.createReadStream(filePath);
-    const rl = readline.createInterface({
-      input: fileStream,
-      crlfDelay: Infinity
-    });
-    
-    // console.log(`[JSONL Parser] Reading file: ${filePath}`);
-    let lineCount = 0;
-    
-    for await (const line of rl) {
-      if (line.trim()) {
-        lineCount++;
-        try {
-          const entry = JSON.parse(line);
-          
-          if (entry.sessionId) {
-            if (!sessions.has(entry.sessionId)) {
-              sessions.set(entry.sessionId, {
-                id: entry.sessionId,
-                summary: 'New Session',
-                messageCount: 0,
-                lastActivity: new Date(),
-                cwd: entry.cwd || ''
+    for (const baseDir of projectDirs) {
+      try {
+        const exists = await fs.access(baseDir).then(() => true).catch(() => false);
+        if (!exists) continue;
+        
+        const entries = await fs.readdir(baseDir, { withFileTypes: true });
+        
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            const projectPath = path.join(baseDir, entry.name);
+            
+            // Skip hidden directories and common non-project directories
+            if (entry.name.startsWith('.') || 
+                ['node_modules', 'dist', 'build', 'target', '.git'].includes(entry.name)) {
+              continue;
+            }
+            
+            // Check if this looks like a project directory
+            const isProject = await isProjectDirectory(projectPath);
+            if (isProject && !foundProjects.has(projectPath)) {
+              foundProjects.add(projectPath);
+              
+              const displayName = await generateDisplayName(entry.name, projectPath);
+              const sessions = await getSessionsForProject(projectPath);
+              
+              projects.push({
+                name: entry.name,
+                displayName: displayName,
+                fullPath: projectPath,
+                sessionMeta: {
+                  total: sessions.length,
+                  lastActivity: sessions.length > 0 ? 
+                    Math.max(...sessions.map(s => new Date(s.updated_at || s.created_at).getTime())) : 
+                    null
+                },
+                sessions: sessions
               });
             }
-            
-            const session = sessions.get(entry.sessionId);
-            
-            // Update summary if this is a summary entry
-            if (entry.type === 'summary' && entry.summary) {
-              session.summary = entry.summary;
-            } else if (entry.message?.role === 'user' && entry.message?.content && session.summary === 'New Session') {
-              // Use first user message as summary if no summary entry exists
-              const content = entry.message.content;
-              if (typeof content === 'string' && content.length > 0) {
-                // Skip command messages that start with <command-name>
-                if (!content.startsWith('<command-name>')) {
-                  session.summary = content.length > 50 ? content.substring(0, 50) + '...' : content;
-                }
-              }
-            }
-            
-            // Count messages instead of storing them all
-            session.messageCount = (session.messageCount || 0) + 1;
-            
-            // Update last activity
-            if (entry.timestamp) {
-              session.lastActivity = new Date(entry.timestamp);
-            }
           }
-        } catch (parseError) {
-          console.warn(`[JSONL Parser] Error parsing line ${lineCount}:`, parseError.message);
         }
+      } catch (error) {
+        console.error(`Error scanning directory ${baseDir}:`, error);
       }
     }
     
-    // console.log(`[JSONL Parser] Processed ${lineCount} lines, found ${sessions.size} sessions`);
+    // Sort projects by last activity
+    projects.sort((a, b) => {
+      const aTime = a.sessionMeta.lastActivity || 0;
+      const bTime = b.sessionMeta.lastActivity || 0;
+      return bTime - aTime;
+    });
+    
+    return projects;
   } catch (error) {
-    console.error('Error reading JSONL file:', error);
-  }
-  
-  // Convert Map to Array and sort by last activity
-  return Array.from(sessions.values()).sort((a, b) => 
-    new Date(b.lastActivity) - new Date(a.lastActivity)
-  );
-}
-
-// Get messages for a specific session
-async function getSessionMessages(projectName, sessionId) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
-  
-  try {
-    const files = await fs.readdir(projectDir);
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
-    
-    if (jsonlFiles.length === 0) {
-      return [];
-    }
-    
-    const messages = [];
-    
-    // Process all JSONL files to find messages for this session
-    for (const file of jsonlFiles) {
-      const jsonlFile = path.join(projectDir, file);
-      const fileStream = fsSync.createReadStream(jsonlFile);
-      const rl = readline.createInterface({
-        input: fileStream,
-        crlfDelay: Infinity
-      });
-      
-      for await (const line of rl) {
-        if (line.trim()) {
-          try {
-            const entry = JSON.parse(line);
-            if (entry.sessionId === sessionId) {
-              messages.push(entry);
-            }
-          } catch (parseError) {
-            console.warn('Error parsing line:', parseError.message);
-          }
-        }
-      }
-    }
-    
-    // Sort messages by timestamp
-    return messages.sort((a, b) => 
-      new Date(a.timestamp || 0) - new Date(b.timestamp || 0)
-    );
-  } catch (error) {
-    console.error(`Error reading messages for session ${sessionId}:`, error);
+    console.error('Error getting Q Developer projects:', error);
     return [];
   }
 }
 
-// Rename a project's display name
-async function renameProject(projectName, newDisplayName) {
-  const config = await loadProjectConfig();
-  
-  if (!newDisplayName || newDisplayName.trim() === '') {
-    // Remove custom name if empty, will fall back to auto-generated
-    delete config[projectName];
-  } else {
-    // Set custom display name
-    config[projectName] = {
-      displayName: newDisplayName.trim()
-    };
-  }
-  
-  await saveProjectConfig(config);
-  return true;
-}
-
-// Delete a session from a project
-async function deleteSession(projectName, sessionId) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
-  
+// Check if a directory looks like a project directory
+async function isProjectDirectory(dirPath) {
   try {
-    const files = await fs.readdir(projectDir);
-    const jsonlFiles = files.filter(file => file.endsWith('.jsonl'));
+    const entries = await fs.readdir(dirPath);
     
-    if (jsonlFiles.length === 0) {
-      throw new Error('No session files found for this project');
-    }
+    // Check for common project indicators
+    const projectIndicators = [
+      'package.json',
+      'pom.xml',
+      'Cargo.toml',
+      'requirements.txt',
+      'setup.py',
+      'pyproject.toml',
+      'go.mod',
+      'Makefile',
+      'CMakeLists.txt',
+      '.git',
+      'src',
+      'lib',
+      'README.md',
+      'README.txt'
+    ];
     
-    // Check all JSONL files to find which one contains the session
-    for (const file of jsonlFiles) {
-      const jsonlFile = path.join(projectDir, file);
-      const content = await fs.readFile(jsonlFile, 'utf8');
-      const lines = content.split('\n').filter(line => line.trim());
-      
-      // Check if this file contains the session
-      const hasSession = lines.some(line => {
-        try {
-          const data = JSON.parse(line);
-          return data.sessionId === sessionId;
-        } catch {
-          return false;
-        }
-      });
-      
-      if (hasSession) {
-        // Filter out all entries for this session
-        const filteredLines = lines.filter(line => {
-          try {
-            const data = JSON.parse(line);
-            return data.sessionId !== sessionId;
-          } catch {
-            return true; // Keep malformed lines
-          }
-        });
-        
-        // Write back the filtered content
-        await fs.writeFile(jsonlFile, filteredLines.join('\n') + (filteredLines.length > 0 ? '\n' : ''));
-        return true;
-      }
-    }
-    
-    throw new Error(`Session ${sessionId} not found in any files`);
+    return projectIndicators.some(indicator => entries.includes(indicator));
   } catch (error) {
-    console.error(`Error deleting session ${sessionId} from project ${projectName}:`, error);
-    throw error;
-  }
-}
-
-// Check if a project is empty (has no sessions)
-async function isProjectEmpty(projectName) {
-  try {
-    const sessionsResult = await getSessions(projectName, 1, 0);
-    return sessionsResult.total === 0;
-  } catch (error) {
-    console.error(`Error checking if project ${projectName} is empty:`, error);
     return false;
   }
 }
 
-// Delete an empty project
-async function deleteProject(projectName) {
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
-  
+// Get sessions for a specific project (Q Developer doesn't have built-in session management like Claude)
+// We'll create a simple session tracking system
+async function getSessionsForProject(projectPath) {
   try {
-    // First check if the project is empty
-    const isEmpty = await isProjectEmpty(projectName);
-    if (!isEmpty) {
-      throw new Error('Cannot delete project with existing sessions');
+    const sessionsDir = path.join(os.homedir(), '.q-developer', 'sessions', path.basename(projectPath));
+    
+    const exists = await fs.access(sessionsDir).then(() => true).catch(() => false);
+    if (!exists) {
+      return [];
     }
     
-    // Remove the project directory
-    await fs.rm(projectDir, { recursive: true, force: true });
+    const sessionFiles = await fs.readdir(sessionsDir);
+    const sessions = [];
     
-    // Remove from project config
-    const config = await loadProjectConfig();
-    delete config[projectName];
-    await saveProjectConfig(config);
+    for (const file of sessionFiles) {
+      if (file.endsWith('.json')) {
+        try {
+          const sessionPath = path.join(sessionsDir, file);
+          const sessionData = await fs.readFile(sessionPath, 'utf8');
+          const session = JSON.parse(sessionData);
+          sessions.push(session);
+        } catch (error) {
+          console.error(`Error reading session file ${file}:`, error);
+        }
+      }
+    }
     
-    return true;
+    // Sort by creation date, newest first
+    sessions.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+    
+    return sessions;
   } catch (error) {
-    console.error(`Error deleting project ${projectName}:`, error);
+    console.error(`Error getting sessions for project ${projectPath}:`, error);
+    return [];
+  }
+}
+
+// Get all sessions across all projects
+async function getSessions() {
+  try {
+    const projects = await getProjects();
+    const allSessions = [];
+    
+    for (const project of projects) {
+      if (project.sessions) {
+        allSessions.push(...project.sessions.map(session => ({
+          ...session,
+          projectName: project.name,
+          projectPath: project.fullPath
+        })));
+      }
+    }
+    
+    return allSessions;
+  } catch (error) {
+    console.error('Error getting all sessions:', error);
+    return [];
+  }
+}
+
+// Get messages for a specific session
+async function getSessionMessages(sessionId) {
+  try {
+    const sessions = await getSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    
+    if (!session) {
+      return [];
+    }
+    
+    const messagesPath = path.join(os.homedir(), '.q-developer', 'sessions', 
+                                   path.basename(session.projectPath), `${sessionId}_messages.jsonl`);
+    
+    const exists = await fs.access(messagesPath).then(() => true).catch(() => false);
+    if (!exists) {
+      return [];
+    }
+    
+    const messagesData = await fs.readFile(messagesPath, 'utf8');
+    const messages = messagesData.trim().split('\n')
+      .filter(line => line.trim())
+      .map(line => JSON.parse(line));
+    
+    return messages;
+  } catch (error) {
+    console.error(`Error getting messages for session ${sessionId}:`, error);
+    return [];
+  }
+}
+
+// Create a new session for a project
+async function createSession(projectPath, title = null) {
+  try {
+    const sessionId = `q-session-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+    const sessionsDir = path.join(os.homedir(), '.q-developer', 'sessions', path.basename(projectPath));
+    
+    // Ensure sessions directory exists
+    await fs.mkdir(sessionsDir, { recursive: true });
+    
+    const session = {
+      id: sessionId,
+      title: title || `Session ${new Date().toLocaleString()}`,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      projectPath: projectPath,
+      messageCount: 0
+    };
+    
+    const sessionPath = path.join(sessionsDir, `${sessionId}.json`);
+    await fs.writeFile(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+    
+    return session;
+  } catch (error) {
+    console.error('Error creating session:', error);
     throw error;
   }
 }
 
-// Add a project manually to the config (without creating folders)
-async function addProjectManually(projectPath, displayName = null) {
-  const absolutePath = path.resolve(projectPath);
-  
+// Add a message to a session
+async function addMessageToSession(sessionId, message) {
   try {
-    // Check if the path exists
-    await fs.access(absolutePath);
-  } catch (error) {
-    throw new Error(`Path does not exist: ${absolutePath}`);
-  }
-  
-  // Generate project name (encode path for use as directory name)
-  const projectName = absolutePath.replace(/\//g, '-');
-  
-  // Check if project already exists in config or as a folder
-  const config = await loadProjectConfig();
-  const projectDir = path.join(process.env.HOME, '.claude', 'projects', projectName);
-  
-  try {
-    await fs.access(projectDir);
-    throw new Error(`Project already exists for path: ${absolutePath}`);
-  } catch (error) {
-    if (error.code !== 'ENOENT') {
-      throw error;
+    const sessions = await getSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    
+    if (!session) {
+      throw new Error(`Session ${sessionId} not found`);
     }
+    
+    const messagesPath = path.join(os.homedir(), '.q-developer', 'sessions', 
+                                   path.basename(session.projectPath), `${sessionId}_messages.jsonl`);
+    
+    const messageWithTimestamp = {
+      ...message,
+      timestamp: new Date().toISOString(),
+      id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`
+    };
+    
+    // Append message to JSONL file
+    await fs.appendFile(messagesPath, JSON.stringify(messageWithTimestamp) + '\n', 'utf8');
+    
+    // Update session metadata
+    const sessionsDir = path.join(os.homedir(), '.q-developer', 'sessions', path.basename(session.projectPath));
+    const sessionPath = path.join(sessionsDir, `${sessionId}.json`);
+    
+    session.updated_at = new Date().toISOString();
+    session.messageCount = (session.messageCount || 0) + 1;
+    
+    await fs.writeFile(sessionPath, JSON.stringify(session, null, 2), 'utf8');
+    
+    return messageWithTimestamp;
+  } catch (error) {
+    console.error('Error adding message to session:', error);
+    throw error;
   }
-  
-  if (config[projectName]) {
-    throw new Error(`Project already configured for path: ${absolutePath}`);
-  }
-  
-  // Add to config as manually added project
-  config[projectName] = {
-    manuallyAdded: true,
-    originalPath: absolutePath
-  };
-  
-  if (displayName) {
-    config[projectName].displayName = displayName;
-  }
-  
-  await saveProjectConfig(config);
-  
-  
-  return {
-    name: projectName,
-    path: absolutePath,
-    fullPath: absolutePath,
-    displayName: displayName || await generateDisplayName(projectName, absolutePath),
-    isManuallyAdded: true,
-    sessions: []
-  };
 }
 
+// Rename a project
+async function renameProject(oldName, newName) {
+  // For Q Developer, we'll update the display name in config
+  const config = await loadProjectConfig();
+  
+  if (!config.projectDisplayNames) {
+    config.projectDisplayNames = {};
+  }
+  
+  config.projectDisplayNames[oldName] = newName;
+  await saveProjectConfig(config);
+  
+  return true;
+}
+
+// Delete a session
+async function deleteSession(sessionId) {
+  try {
+    const sessions = await getSessions();
+    const session = sessions.find(s => s.id === sessionId);
+    
+    if (!session) {
+      return false;
+    }
+    
+    const sessionsDir = path.join(os.homedir(), '.q-developer', 'sessions', path.basename(session.projectPath));
+    const sessionPath = path.join(sessionsDir, `${sessionId}.json`);
+    const messagesPath = path.join(sessionsDir, `${sessionId}_messages.jsonl`);
+    
+    // Delete session file
+    try {
+      await fs.unlink(sessionPath);
+    } catch (error) {
+      console.error('Error deleting session file:', error);
+    }
+    
+    // Delete messages file
+    try {
+      await fs.unlink(messagesPath);
+    } catch (error) {
+      console.error('Error deleting messages file:', error);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error deleting session:', error);
+    return false;
+  }
+}
+
+// Delete a project (remove from tracking, don't delete actual files)
+async function deleteProject(projectName) {
+  try {
+    // Remove project from config
+    const config = await loadProjectConfig();
+    
+    if (config.projectDisplayNames) {
+      delete config.projectDisplayNames[projectName];
+    }
+    
+    if (config.additionalProjectDirs) {
+      config.additionalProjectDirs = config.additionalProjectDirs.filter(dir => 
+        path.basename(dir) !== projectName
+      );
+    }
+    
+    await saveProjectConfig(config);
+    
+    // Optionally clean up sessions for this project
+    const sessionsDir = path.join(os.homedir(), '.q-developer', 'sessions', projectName);
+    try {
+      await fs.rmdir(sessionsDir, { recursive: true });
+    } catch (error) {
+      // Sessions directory might not exist
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error deleting project:', error);
+    return false;
+  }
+}
+
+// Add a project manually
+async function addProjectManually(projectPath) {
+  try {
+    const config = await loadProjectConfig();
+    
+    if (!config.additionalProjectDirs) {
+      config.additionalProjectDirs = [];
+    }
+    
+    if (!config.additionalProjectDirs.includes(projectPath)) {
+      config.additionalProjectDirs.push(projectPath);
+      await saveProjectConfig(config);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error('Error adding project manually:', error);
+    return false;
+  }
+}
+
+// Extract project directory (for compatibility with existing code)
+async function extractProjectDirectory(projectName) {
+  // For Q Developer, project name is typically the directory name
+  const projects = await getProjects();
+  const project = projects.find(p => p.name === projectName);
+  return project ? project.fullPath : null;
+}
 
 export {
   getProjects,
   getSessions,
   getSessionMessages,
-  parseJsonlSessions,
+  createSession,
+  addMessageToSession,
   renameProject,
   deleteSession,
-  isProjectEmpty,
   deleteProject,
   addProjectManually,
-  loadProjectConfig,
-  saveProjectConfig,
   extractProjectDirectory,
   clearProjectDirectoryCache
 };

@@ -20,7 +20,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback, memo } from '
 import ReactMarkdown from 'react-markdown';
 import { useDropzone } from 'react-dropzone';
 import TodoList from './TodoList';
-import ClaudeLogo from './ClaudeLogo.jsx';
+import QDeveloperLogo from './QDeveloperLogo.jsx';
 
 import ClaudeStatus from './ClaudeStatus';
 import { MicButton } from './MicButton.jsx';
@@ -189,11 +189,11 @@ const MessageComponent = memo(({ message, index, prevMessage, createDiff, onFile
                 </div>
               ) : (
                 <div className="w-8 h-8 rounded-full flex items-center justify-center text-white text-sm flex-shrink-0 p-1">
-                  <ClaudeLogo className="w-full h-full" />
+                  <QDeveloperLogo className="w-full h-full" />
                 </div>
               )}
               <div className="text-sm font-medium text-gray-900 dark:text-white">
-                {message.type === 'error' ? 'Error' : 'Claude'}
+                {message.type === 'error' ? 'Error' : 'Q Developer'}
               </div>
             </div>
           )}
@@ -1143,6 +1143,9 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
   const [slashPosition, setSlashPosition] = useState(-1);
   const [visibleMessageCount, setVisibleMessageCount] = useState(100);
   const [claudeStatus, setClaudeStatus] = useState(null);
+  
+  // Buffer for Q Developer CLI output streaming
+  let qOutputBuffer = useRef('');
 
 
   // Memoized diff calculation to prevent recalculating on every render
@@ -1438,146 +1441,45 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
           }
           break;
           
-        case 'claude-response':
-          const messageData = latestMessage.data.message || latestMessage.data;
+        case 'q-output':
+          // Q Developer CLI outputs plain text, not complex JSON structures like Claude CLI
+          const outputText = latestMessage.data;
           
-          // Handle Claude CLI session duplication bug workaround:
-          // When resuming a session, Claude CLI creates a new session instead of resuming.
-          // We detect this by checking for system/init messages with session_id that differs
-          // from our current session. When found, we need to switch the user to the new session.
-          if (latestMessage.data.type === 'system' && 
-              latestMessage.data.subtype === 'init' && 
-              latestMessage.data.session_id && 
-              currentSessionId && 
-              latestMessage.data.session_id !== currentSessionId) {
-            
-            console.log('🔄 Claude CLI session duplication detected:', {
-              originalSession: currentSessionId,
-              newSession: latestMessage.data.session_id
-            });
-            
-            // Mark this as a system-initiated session change to preserve messages
-            setIsSystemSessionChange(true);
-            
-            // Switch to the new session using React Router navigation
-            // This triggers the session loading logic in App.jsx without a page reload
-            if (onNavigateToSession) {
-              onNavigateToSession(latestMessage.data.session_id);
-            }
-            return; // Don't process the message further, let the navigation handle it
+          // Skip empty or whitespace-only output
+          if (!outputText || !outputText.trim()) {
+            break;
           }
           
-          // Handle system/init for new sessions (when currentSessionId is null)
-          if (latestMessage.data.type === 'system' && 
-              latestMessage.data.subtype === 'init' && 
-              latestMessage.data.session_id && 
-              !currentSessionId) {
-            
-            console.log('🔄 New session init detected:', {
-              newSession: latestMessage.data.session_id
-            });
-            
-            // Mark this as a system-initiated session change to preserve messages
-            setIsSystemSessionChange(true);
-            
-            // Switch to the new session
-            if (onNavigateToSession) {
-              onNavigateToSession(latestMessage.data.session_id);
-            }
-            return; // Don't process the message further, let the navigation handle it
-          }
+          // Accumulate output in a buffer to handle streaming text
+          qOutputBuffer.current += outputText;
           
-          // For system/init messages that match current session, just ignore them
-          if (latestMessage.data.type === 'system' && 
-              latestMessage.data.subtype === 'init' && 
-              latestMessage.data.session_id && 
-              currentSessionId && 
-              latestMessage.data.session_id === currentSessionId) {
-            console.log('🔄 System init message for current session, ignoring');
-            return; // Don't process the message further
-          }
-          
-          // Handle different types of content in the response
-          if (Array.isArray(messageData.content)) {
-            for (const part of messageData.content) {
-              if (part.type === 'tool_use') {
-                // Add tool use message
-                const toolInput = part.input ? JSON.stringify(part.input, null, 2) : '';
-                setChatMessages(prev => [...prev, {
-                  type: 'assistant',
-                  content: '',
-                  timestamp: new Date(),
-                  isToolUse: true,
-                  toolName: part.name,
-                  toolInput: toolInput,
-                  toolId: part.id,
-                  toolResult: null // Will be updated when result comes in
-                }]);
-              } else if (part.type === 'text' && part.text?.trim()) {
-                // Check for usage limit message and format it user-friendly
-                let content = part.text;
-                if (content.includes('Claude AI usage limit reached|')) {
-                  const parts = content.split('|');
-                  if (parts.length === 2) {
-                    const timestamp = parseInt(parts[1]);
-                    if (!isNaN(timestamp)) {
-                      const resetTime = new Date(timestamp * 1000);
-                      content = `Claude AI usage limit reached. The limit will reset on ${resetTime.toLocaleDateString()} at ${resetTime.toLocaleTimeString()}.`;
-                    }
-                  }
+          // Check if we have a complete response (Q CLI typically ends with a newline)
+          // For now, we'll add each chunk as it comes for real-time display
+          setChatMessages(prev => {
+            // Check if the last message is already a Q Developer response that we can append to
+            const lastMessage = prev[prev.length - 1];
+            if (lastMessage && lastMessage.type === 'assistant' && lastMessage.isQDeveloper) {
+              // Append to existing message
+              return prev.map((msg, index) => {
+                if (index === prev.length - 1) {
+                  return {
+                    ...msg,
+                    content: msg.content + outputText,
+                    timestamp: new Date()
+                  };
                 }
-                
-                // Add regular text message
-                setChatMessages(prev => [...prev, {
-                  type: 'assistant',
-                  content: content,
-                  timestamp: new Date()
-                }]);
-              }
+                return msg;
+              });
+            } else {
+              // Create new message
+              return [...prev, {
+                type: 'assistant',
+                content: outputText,
+                timestamp: new Date(),
+                isQDeveloper: true // Mark as Q Developer response
+              }];
             }
-          } else if (typeof messageData.content === 'string' && messageData.content.trim()) {
-            // Check for usage limit message and format it user-friendly
-            let content = messageData.content;
-            if (content.includes('Claude AI usage limit reached|')) {
-              const parts = content.split('|');
-              if (parts.length === 2) {
-                const timestamp = parseInt(parts[1]);
-                if (!isNaN(timestamp)) {
-                  const resetTime = new Date(timestamp * 1000);
-                  content = `Claude AI usage limit reached. The limit will reset on ${resetTime.toLocaleDateString()} at ${resetTime.toLocaleTimeString()}.`;
-                }
-              }
-            }
-            
-            // Add regular text message
-            setChatMessages(prev => [...prev, {
-              type: 'assistant',
-              content: content,
-              timestamp: new Date()
-            }]);
-          }
-          
-          // Handle tool results from user messages (these come separately)
-          if (messageData.role === 'user' && Array.isArray(messageData.content)) {
-            for (const part of messageData.content) {
-              if (part.type === 'tool_result') {
-                // Find the corresponding tool use and update it with the result
-                setChatMessages(prev => prev.map(msg => {
-                  if (msg.isToolUse && msg.toolId === part.tool_use_id) {
-                    return {
-                      ...msg,
-                      toolResult: {
-                        content: part.content,
-                        isError: part.is_error,
-                        timestamp: new Date()
-                      }
-                    };
-                  }
-                  return msg;
-                }));
-              }
-            }
-          }
+          });
           break;
           
         case 'claude-output':
@@ -1605,10 +1507,13 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
           }]);
           break;
           
-        case 'claude-complete':
+        case 'q-complete':
           setIsLoading(false);
           setCanAbortSession(false);
           setClaudeStatus(null);
+          
+          // Clear the Q output buffer
+          qOutputBuffer.current = '';
 
           
           // Session Protection: Mark session as inactive to re-enable automatic project updates
@@ -1629,6 +1534,18 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
           // Clear persisted chat messages after successful completion
           if (selectedProject && latestMessage.exitCode === 0) {
             safeLocalStorage.removeItem(`chat_messages_${selectedProject.name}`);
+          }
+          break;
+          
+        case 'q-error':
+          // Handle Q Developer CLI errors
+          const errorText = latestMessage.data || latestMessage.error;
+          if (errorText && errorText.trim()) {
+            setChatMessages(prev => [...prev, {
+              type: 'error',
+              content: `Q Developer Error: ${errorText}`,
+              timestamp: new Date()
+            }]);
           }
           break;
           
@@ -2046,9 +1963,9 @@ function ChatInterface({ selectedProject, selectedSession, ws, sendMessage, mess
 
     const toolsSettings = getToolsSettings();
 
-    // Send command to Claude CLI via WebSocket with images
+    // Send command to Q Developer CLI via WebSocket with images
     sendMessage({
-      type: 'claude-command',
+      type: 'q-command',
       command: input,
       options: {
         projectPath: selectedProject.path,

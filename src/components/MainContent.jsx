@@ -87,7 +87,7 @@ function MainContent({
                 }} 
               />
             </div>
-            <h2 className="text-xl font-semibold mb-2">Loading Claude Code UI</h2>
+            <h2 className="text-xl font-semibold mb-2">Loading Q Developer WebUI</h2>
             <p>Setting up your workspace...</p>
           </div>
         </div>
@@ -120,7 +120,7 @@ function MainContent({
             </div>
             <h2 className="text-2xl font-semibold mb-3 text-gray-900 dark:text-white">Choose Your Project</h2>
             <p className="text-gray-600 dark:text-gray-300 mb-6 leading-relaxed">
-              Select a project from the sidebar to start coding with Claude. Each project contains your chat sessions and file history.
+              Select a project from the sidebar to start coding with Q Developer. Each project contains your chat sessions and file history.
             </p>
             <div className="bg-blue-50 dark:bg-blue-900/20 rounded-lg p-4 border border-blue-200 dark:border-blue-800">
               <p className="text-sm text-blue-700 dark:text-blue-300">

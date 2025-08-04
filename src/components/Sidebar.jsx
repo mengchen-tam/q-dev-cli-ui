@@ -6,7 +6,7 @@ import { Input } from './ui/input';
 
 import { FolderOpen, Folder, Plus, MessageSquare, Clock, ChevronDown, ChevronRight, Edit3, Check, X, Trash2, Settings, FolderPlus, RefreshCw, Sparkles, Edit2, Star, Search } from 'lucide-react';
 import { cn } from '../lib/utils';
-import ClaudeLogo from './ClaudeLogo';
+import QDeveloperLogo from './QDeveloperLogo';
 import { api } from '../utils/api';
 
 // Move formatTimeAgo outside component to avoid recreation on every render
@@ -424,7 +424,7 @@ function Sidebar({
               <MessageSquare className="w-4 h-4 text-primary-foreground" />
             </div>
             <div>
-              <h1 className="text-lg font-bold text-foreground">Claude Code UI</h1>
+              <h1 className="text-lg font-bold text-foreground">Q Developer WebUI</h1>
               <p className="text-sm text-muted-foreground">AI coding assistant interface</p>
             </div>
           </div>
@@ -466,7 +466,7 @@ function Sidebar({
                 <MessageSquare className="w-4 h-4 text-primary-foreground" />
               </div>
               <div>
-                <h1 className="text-lg font-semibold text-foreground">Claude Code UI</h1>
+                <h1 className="text-lg font-semibold text-foreground">Q Developer WebUI</h1>
                 <p className="text-sm text-muted-foreground">Projects</p>
               </div>
             </div>
@@ -631,7 +631,7 @@ function Sidebar({
               </div>
               <h3 className="text-base font-medium text-foreground mb-2 md:mb-1">Loading projects...</h3>
               <p className="text-sm text-muted-foreground">
-                Fetching your Claude projects and sessions
+                Fetching your Q Developer projects and sessions
               </p>
             </div>
           ) : projects.length === 0 ? (
@@ -641,7 +641,7 @@ function Sidebar({
               </div>
               <h3 className="text-base font-medium text-foreground mb-2 md:mb-1">No projects found</h3>
               <p className="text-sm text-muted-foreground">
-                Run Claude CLI in a project directory to get started
+                Run Q Developer CLI in a project directory to get started
               </p>
             </div>
           ) : filteredProjects.length === 0 ? (

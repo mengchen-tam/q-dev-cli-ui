@@ -382,21 +382,28 @@ function Shell({ selectedProject, selectedSession, isActive }) {
     if (isConnecting || isConnected) return;
     
     try {
-      // Get authentication token
+      // Get authentication token (optional if auth is disabled)
       const token = localStorage.getItem('auth-token');
-      if (!token) {
-        console.error('No authentication token found for Shell WebSocket connection');
-        return;
+      
+      // Check if auth is disabled by checking auth status
+      let authDisabled = false;
+      try {
+        const authStatusResponse = await fetch('/api/auth/status');
+        const authStatus = await authStatusResponse.json();
+        authDisabled = authStatus.authDisabled;
+      } catch (error) {
+        console.log('Could not check auth status:', error);
       }
       
       // Fetch server configuration to get the correct WebSocket URL
       let wsBaseUrl;
       try {
-        const configResponse = await fetch('/api/config', {
-          headers: {
-            'Authorization': `Bearer ${token}`
-          }
-        });
+        const headers = {};
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
+        
+        const configResponse = await fetch('/api/config', { headers });
         const config = await configResponse.json();
         wsBaseUrl = config.wsUrl;
         
@@ -414,8 +421,10 @@ function Shell({ selectedProject, selectedSession, isActive }) {
         wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
       }
       
-      // Include token in WebSocket URL as query parameter
-      const wsUrl = `${wsBaseUrl}/shell?token=${encodeURIComponent(token)}`;
+      // Include token in WebSocket URL as query parameter (if available and auth not disabled)
+      const wsUrl = (token && !authDisabled) ? 
+        `${wsBaseUrl}/shell?token=${encodeURIComponent(token)}` :
+        `${wsBaseUrl}/shell`;
       
       ws.current = new WebSocket(wsUrl);
 
@@ -618,7 +627,7 @@ function Shell({ selectedProject, selectedSession, isActive }) {
                 <span className="text-base font-medium">Connecting to shell...</span>
               </div>
               <p className="text-gray-400 text-sm mt-3 px-2">
-                Starting Claude CLI in {selectedProject.displayName}
+                Starting Q Developer CLI in {selectedProject.displayName}
               </p>
             </div>
           </div>

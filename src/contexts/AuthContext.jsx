@@ -41,6 +41,25 @@ export const AuthProvider = ({ children }) => {
       const statusResponse = await api.auth.status();
       const statusData = await statusResponse.json();
       
+      // If authentication is disabled, set user as authenticated
+      if (statusData.authDisabled) {
+        // Clear any existing invalid token
+        localStorage.removeItem('auth-token');
+        setToken(null);
+        setUser({ id: 1, username: 'test-user' });
+        setNeedsSetup(false);
+        setIsLoading(false);
+        
+        // Force a page reload to ensure clean state
+        if (localStorage.getItem('auth-cleanup-done') !== 'true') {
+          localStorage.setItem('auth-cleanup-done', 'true');
+          window.location.reload();
+          return;
+        }
+        
+        return;
+      }
+      
       if (statusData.needsSetup) {
         setNeedsSetup(true);
         setIsLoading(false);

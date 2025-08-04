@@ -1,7 +1,7 @@
 {
-  "name": "claude-code-ui",
-  "version": "1.5.0",
-  "description": "A web-based UI for Claude Code CLI",
+  "name": "q-developer-webui",
+  "version": "1.0.0",
+  "description": "A web-based UI for Amazon Q Developer CLI",
   "type": "module",
   "main": "server/index.js",
   "scripts": {
@@ -13,13 +13,14 @@
     "start": "npm run build && npm run server"
   },
   "keywords": [
-    "claude",
+    "amazon-q",
+    "q-developer",
     "ai",
     "code",
     "ui",
     "assistant"
   ],
-  "author": "Claude Code UI Contributors",
+  "author": "Q Developer WebUI Contributors",
   "license": "MIT",
   "dependencies": {
     "@codemirror/lang-css": "^6.3.1",

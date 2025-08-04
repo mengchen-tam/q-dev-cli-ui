@@ -8,6 +8,15 @@ const router = express.Router();
 // Check auth status and setup requirements
 router.get('/status', async (req, res) => {
   try {
+    // Skip authentication if REQUIRE_AUTH is false
+    if (process.env.REQUIRE_AUTH === 'false') {
+      return res.json({ 
+        needsSetup: false,
+        isAuthenticated: true,
+        authDisabled: true
+      });
+    }
+
     const hasUsers = await userDb.hasUsers();
     res.json({ 
       needsSetup: !hasUsers,
