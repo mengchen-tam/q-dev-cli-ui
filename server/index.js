@@ -503,6 +503,7 @@ function handleShellConnection(ws) {
         
         // First send a welcome message with usage instructions
         const welcomeMsg = `\x1b[36mQ Developer Shell started in: ${projectPath}\x1b[0m\r\n` +
+          `\x1b[32m🚀 Amazon Q Developer CLI will auto-start shortly...\x1b[0m\r\n` +
           `\x1b[33mUsage: q chat "your message here"\x1b[0m\r\n` +
           `\x1b[33mOr use: q chat (for interactive mode)\x1b[0m\r\n\r\n`;
         
@@ -534,10 +535,42 @@ function handleShellConnection(ws) {
           
           console.log('🟢 Shell process started with PTY, PID:', shellProcess.pid);
           
+          // Auto-start Q Developer CLI after shell is ready
+          let shellReady = false;
+          let promptDetected = false;
+          
           // Handle data output
           shellProcess.onData((data) => {
             if (ws.readyState === ws.OPEN) {
               let outputData = data;
+              
+              // Auto-start Q Developer CLI when shell prompt is ready
+              if (!shellReady && !promptDetected) {
+                // Detect common shell prompts (bash, zsh, etc.)
+                const promptPatterns = [
+                  /\$\s*$/,           // bash prompt ending with $
+                  /#\s*$/,           // root prompt ending with #
+                  />\s*$/,           // some shells use >
+                  /ubuntu@.*:\S+\$/, // ubuntu user prompt
+                  /.*@.*:\S+[\$#]\s*$/ // general user@host:path$ pattern
+                ];
+                
+                const hasPrompt = promptPatterns.some(pattern => pattern.test(data.trim()));
+                
+                if (hasPrompt) {
+                  promptDetected = true;
+                  console.log('🎯 Shell prompt detected, auto-starting Q Developer CLI...');
+                  
+                  // Wait a moment for shell to be fully ready, then send q chat command
+                  setTimeout(() => {
+                    if (shellProcess && shellProcess.write) {
+                      console.log('🚀 Auto-executing: q chat');
+                      shellProcess.write('q chat\r');
+                      shellReady = true;
+                    }
+                  }, 500);
+                }
+              }
               
               // Check for various URL opening patterns
               const patterns = [
