@@ -1,7 +1,7 @@
 {
-  "name": "Claude Code UI",
-  "short_name": "Claude UI",
-  "description": "Claude Code UI web application",
+  "name": "Q Developer WebUI",
+  "short_name": "Q Developer",
+  "description": "Amazon Q Developer CLI web interface",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#ffffff",
