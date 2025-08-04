@@ -230,7 +230,7 @@ function Shell({ selectedProject, selectedSession, isActive }) {
         brightCyan: '#29b8db',
         brightWhite: '#ffffff',
         
-        // Extended colors for better Claude output
+        // Extended colors for better Q Developer output
         extendedAnsi: [
           // 16-color palette extension for 256-color support
           '#000000', '#800000', '#008000', '#808000',
@@ -611,7 +611,7 @@ function Shell({ selectedProject, selectedSession, isActive }) {
               <p className="text-gray-400 text-sm mt-3 px-2">
                 {selectedSession ? 
                   `Resume session: ${selectedSession.summary.slice(0, 50)}...` : 
-                  'Start a new Claude session'
+                  'Start a new Q Developer session'
                 }
               </p>
             </div>

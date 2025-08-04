@@ -66,19 +66,19 @@ function ToolsSettings({ isOpen, onClose }) {
     try {
       const token = localStorage.getItem('auth-token');
       
-      // First try to get servers using Claude CLI
-      const cliResponse = await fetch('/api/mcp/cli/list', {
+      // Get servers from Q Developer CLI config
+      const response = await fetch('/api/mcp/list', {
         headers: {
           'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json'
         }
       });
       
-      if (cliResponse.ok) {
-        const cliData = await cliResponse.json();
-        if (cliData.success && cliData.servers) {
+      if (response.ok) {
+        const data = await response.json();
+        if (data.success && data.servers) {
           // Convert CLI format to our format
-          const servers = cliData.servers.map(server => ({
+          const servers = data.servers.map(server => ({
             id: server.name,
             name: server.name,
             type: server.type,
@@ -127,8 +127,8 @@ function ToolsSettings({ isOpen, onClose }) {
         await deleteMcpServer(editingMcpServer.id, 'user');
       }
       
-      // Use Claude CLI to add the server
-      const response = await fetch('/api/mcp/cli/add', {
+      // Use Q Developer CLI config to add the server
+      const response = await fetch('/api/mcp/add', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -151,7 +151,7 @@ function ToolsSettings({ isOpen, onClose }) {
           await fetchMcpServers(); // Refresh the list
           return true;
         } else {
-          throw new Error(result.error || 'Failed to save server via Claude CLI');
+          throw new Error(result.error || 'Failed to save server via Q Developer CLI config');
         }
       } else {
         const error = await response.json();
@@ -167,8 +167,8 @@ function ToolsSettings({ isOpen, onClose }) {
     try {
       const token = localStorage.getItem('auth-token');
       
-      // Use Claude CLI to remove the server
-      const response = await fetch(`/api/mcp/cli/remove/${serverId}`, {
+      // Use Q Developer CLI config to remove the server
+      const response = await fetch(`/api/mcp/remove/${serverId}`, {
         method: 'DELETE',
         headers: {
           'Authorization': `Bearer ${token}`,
@@ -182,7 +182,7 @@ function ToolsSettings({ isOpen, onClose }) {
           await fetchMcpServers(); // Refresh the list
           return true;
         } else {
-          throw new Error(result.error || 'Failed to delete server via Claude CLI');
+          throw new Error(result.error || 'Failed to delete server via Q Developer CLI config');
         }
       } else {
         const error = await response.json();
@@ -277,7 +277,7 @@ function ToolsSettings({ isOpen, onClose }) {
     try {
       
       // Load from localStorage
-      const savedSettings = localStorage.getItem('claude-tools-settings');
+      const savedSettings = localStorage.getItem('q-developer-tools-settings');
       
       if (savedSettings) {
         const settings = JSON.parse(savedSettings);
@@ -320,7 +320,7 @@ function ToolsSettings({ isOpen, onClose }) {
       
       
       // Save to localStorage
-      localStorage.setItem('claude-tools-settings', JSON.stringify(settings));
+      localStorage.setItem('q-developer-tools-settings', JSON.stringify(settings));
       
       setSaveStatus('success');
       
@@ -818,7 +818,7 @@ function ToolsSettings({ isOpen, onClose }) {
               </div>
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  Model Context Protocol servers provide additional tools and data sources to Claude
+                  Model Context Protocol servers provide additional tools and data sources to Amazon Q Developer
                 </p>
               </div>
               

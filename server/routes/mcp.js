@@ -4,283 +4,334 @@ import path from 'path';
 import os from 'os';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { spawn } from 'child_process';
 
 const router = express.Router();
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
 
-// Claude CLI command routes
+// Q Developer CLI MCP configuration file path
+const getMcpConfigPath = () => {
+  return path.join(os.homedir(), '.aws', 'amazonq', 'mcp.json');
+};
 
-// GET /api/mcp/cli/list - List MCP servers using Claude CLI
-router.get('/cli/list', async (req, res) => {
+// Ensure MCP config directory exists
+const ensureMcpConfigDir = async () => {
+  const configDir = path.dirname(getMcpConfigPath());
   try {
-    console.log('📋 Listing MCP servers using Claude CLI');
-    
-    const { spawn } = await import('child_process');
-    const { promisify } = await import('util');
-    const exec = promisify(spawn);
-    
-    const process = spawn('claude', ['mcp', 'list', '-s', 'user'], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
-    
-    let stdout = '';
-    let stderr = '';
-    
-    process.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    process.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    process.on('close', (code) => {
-      if (code === 0) {
-        res.json({ success: true, output: stdout, servers: parseClaudeListOutput(stdout) });
-      } else {
-        console.error('Claude CLI error:', stderr);
-        res.status(500).json({ error: 'Claude CLI command failed', details: stderr });
-      }
-    });
-    
-    process.on('error', (error) => {
-      console.error('Error running Claude CLI:', error);
-      res.status(500).json({ error: 'Failed to run Claude CLI', details: error.message });
-    });
+    await fs.mkdir(configDir, { recursive: true });
   } catch (error) {
-    console.error('Error listing MCP servers via CLI:', error);
-    res.status(500).json({ error: 'Failed to list MCP servers', details: error.message });
+    if (error.code !== 'EEXIST') {
+      throw error;
+    }
+  }
+};
+
+// Read MCP configuration
+const readMcpConfig = async () => {
+  try {
+    const configPath = getMcpConfigPath();
+    const data = await fs.readFile(configPath, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    if (error.code === 'ENOENT') {
+      // Return default config if file doesn't exist
+      return {
+        mcpServers: {}
+      };
+    }
+    throw error;
+  }
+};
+
+// Write MCP configuration
+const writeMcpConfig = async (config) => {
+  await ensureMcpConfigDir();
+  const configPath = getMcpConfigPath();
+  await fs.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+};
+
+// GET /api/mcp/list - List MCP servers from Q Developer CLI config
+router.get('/list', async (req, res) => {
+  try {
+    console.log('📋 Listing MCP servers from Q Developer CLI config');
+    
+    const config = await readMcpConfig();
+    const servers = [];
+    
+    // Convert config format to our API format
+    for (const [name, serverConfig] of Object.entries(config.mcpServers || {})) {
+      servers.push({
+        name,
+        type: serverConfig.command ? 'stdio' : 'sse',
+        command: serverConfig.command,
+        args: serverConfig.args || [],
+        url: serverConfig.url,
+        headers: serverConfig.headers || {},
+        env: serverConfig.env || {},
+        enabled: serverConfig.enabled !== false // default to true
+      });
+    }
+    
+    console.log('🔍 Found MCP servers:', servers.length);
+    res.json({ success: true, servers });
+  } catch (error) {
+    console.error('Error reading MCP config:', error);
+    res.status(500).json({ error: 'Failed to read MCP configuration', details: error.message });
   }
 });
 
-// POST /api/mcp/cli/add - Add MCP server using Claude CLI
-router.post('/cli/add', async (req, res) => {
+// POST /api/mcp/add - Add MCP server to Q Developer CLI config
+router.post('/add', async (req, res) => {
   try {
-    const { name, type = 'stdio', command, args = [], url, headers = {}, env = {} } = req.body;
+    const { name, type = 'stdio', command, args = [], url, headers = {}, env = {}, enabled = true } = req.body;
     
-    console.log('➕ Adding MCP server using Claude CLI:', name);
+    if (!name) {
+      return res.status(400).json({ error: 'Server name is required' });
+    }
     
-    const { spawn } = await import('child_process');
+    if (type === 'stdio' && !command) {
+      return res.status(400).json({ error: 'Command is required for stdio servers' });
+    }
     
-    let cliArgs = ['mcp', 'add'];
+    if (type === 'sse' && !url) {
+      return res.status(400).json({ error: 'URL is required for SSE servers' });
+    }
     
-    if (type === 'http') {
-      cliArgs.push('--transport', 'http', name, '-s', 'user', url);
-      // Add headers if provided
-      Object.entries(headers).forEach(([key, value]) => {
-        cliArgs.push('--header', `${key}: ${value}`);
-      });
+    console.log('➕ Adding MCP server to Q Developer CLI config:', name);
+    
+    const config = await readMcpConfig();
+    
+    // Check if server already exists
+    if (config.mcpServers && config.mcpServers[name]) {
+      return res.status(409).json({ error: `MCP server "${name}" already exists` });
+    }
+    
+    // Initialize mcpServers if it doesn't exist
+    if (!config.mcpServers) {
+      config.mcpServers = {};
+    }
+    
+    // Add new server configuration
+    const serverConfig = {
+      enabled
+    };
+    
+    if (type === 'stdio') {
+      serverConfig.command = command;
+      if (args.length > 0) {
+        serverConfig.args = args;
+      }
+      if (Object.keys(env).length > 0) {
+        serverConfig.env = env;
+      }
     } else if (type === 'sse') {
-      cliArgs.push('--transport', 'sse', name, '-s', 'user', url);
-      // Add headers if provided
-      Object.entries(headers).forEach(([key, value]) => {
-        cliArgs.push('--header', `${key}: ${value}`);
-      });
-    } else {
-      // stdio (default): claude mcp add <name> -s user <command> [args...]
-      cliArgs.push(name, '-s', 'user');
-      // Add environment variables
-      Object.entries(env).forEach(([key, value]) => {
-        cliArgs.push('-e', `${key}=${value}`);
-      });
-      cliArgs.push(command);
-      if (args && args.length > 0) {
-        cliArgs.push(...args);
+      serverConfig.url = url;
+      if (Object.keys(headers).length > 0) {
+        serverConfig.headers = headers;
       }
     }
     
-    console.log('🔧 Running Claude CLI command:', 'claude', cliArgs.join(' '));
+    config.mcpServers[name] = serverConfig;
     
-    const process = spawn('claude', cliArgs, {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+    await writeMcpConfig(config);
     
-    let stdout = '';
-    let stderr = '';
-    
-    process.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    process.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    process.on('close', (code) => {
-      if (code === 0) {
-        res.json({ success: true, output: stdout, message: `MCP server "${name}" added successfully` });
-      } else {
-        console.error('Claude CLI error:', stderr);
-        res.status(400).json({ error: 'Claude CLI command failed', details: stderr });
-      }
-    });
-    
-    process.on('error', (error) => {
-      console.error('Error running Claude CLI:', error);
-      res.status(500).json({ error: 'Failed to run Claude CLI', details: error.message });
+    console.log('✅ MCP server added successfully:', name);
+    res.json({ 
+      success: true, 
+      message: `MCP server "${name}" added successfully`,
+      server: { name, ...serverConfig }
     });
   } catch (error) {
-    console.error('Error adding MCP server via CLI:', error);
+    console.error('Error adding MCP server:', error);
     res.status(500).json({ error: 'Failed to add MCP server', details: error.message });
   }
 });
 
-// DELETE /api/mcp/cli/remove/:name - Remove MCP server using Claude CLI
-router.delete('/cli/remove/:name', async (req, res) => {
+// PUT /api/mcp/update/:name - Update MCP server in Q Developer CLI config
+router.put('/update/:name', async (req, res) => {
+  try {
+    const { name } = req.params;
+    const { type = 'stdio', command, args = [], url, headers = {}, env = {}, enabled = true } = req.body;
+    
+    console.log('🔄 Updating MCP server in Q Developer CLI config:', name);
+    
+    const config = await readMcpConfig();
+    
+    if (!config.mcpServers || !config.mcpServers[name]) {
+      return res.status(404).json({ error: `MCP server "${name}" not found` });
+    }
+    
+    // Update server configuration
+    const serverConfig = {
+      enabled
+    };
+    
+    if (type === 'stdio') {
+      serverConfig.command = command;
+      if (args.length > 0) {
+        serverConfig.args = args;
+      }
+      if (Object.keys(env).length > 0) {
+        serverConfig.env = env;
+      }
+    } else if (type === 'sse') {
+      serverConfig.url = url;
+      if (Object.keys(headers).length > 0) {
+        serverConfig.headers = headers;
+      }
+    }
+    
+    config.mcpServers[name] = serverConfig;
+    
+    await writeMcpConfig(config);
+    
+    console.log('✅ MCP server updated successfully:', name);
+    res.json({ 
+      success: true, 
+      message: `MCP server "${name}" updated successfully`,
+      server: { name, ...serverConfig }
+    });
+  } catch (error) {
+    console.error('Error updating MCP server:', error);
+    res.status(500).json({ error: 'Failed to update MCP server', details: error.message });
+  }
+});
+
+// DELETE /api/mcp/remove/:name - Remove MCP server from Q Developer CLI config
+router.delete('/remove/:name', async (req, res) => {
   try {
     const { name } = req.params;
     
-    console.log('🗑️ Removing MCP server using Claude CLI:', name);
+    console.log('🗑️ Removing MCP server from Q Developer CLI config:', name);
     
-    const { spawn } = await import('child_process');
+    const config = await readMcpConfig();
     
-    const process = spawn('claude', ['mcp', 'remove', '-s', 'user', name], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+    if (!config.mcpServers || !config.mcpServers[name]) {
+      return res.status(404).json({ error: `MCP server "${name}" not found` });
+    }
     
-    let stdout = '';
-    let stderr = '';
+    delete config.mcpServers[name];
     
-    process.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
+    await writeMcpConfig(config);
     
-    process.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    process.on('close', (code) => {
-      if (code === 0) {
-        res.json({ success: true, output: stdout, message: `MCP server "${name}" removed successfully` });
-      } else {
-        console.error('Claude CLI error:', stderr);
-        res.status(400).json({ error: 'Claude CLI command failed', details: stderr });
-      }
-    });
-    
-    process.on('error', (error) => {
-      console.error('Error running Claude CLI:', error);
-      res.status(500).json({ error: 'Failed to run Claude CLI', details: error.message });
+    console.log('✅ MCP server removed successfully:', name);
+    res.json({ 
+      success: true, 
+      message: `MCP server "${name}" removed successfully`
     });
   } catch (error) {
-    console.error('Error removing MCP server via CLI:', error);
+    console.error('Error removing MCP server:', error);
     res.status(500).json({ error: 'Failed to remove MCP server', details: error.message });
   }
 });
 
-// GET /api/mcp/cli/get/:name - Get MCP server details using Claude CLI
-router.get('/cli/get/:name', async (req, res) => {
+// GET /api/mcp/get/:name - Get MCP server details from Q Developer CLI config
+router.get('/get/:name', async (req, res) => {
   try {
     const { name } = req.params;
     
-    console.log('📄 Getting MCP server details using Claude CLI:', name);
+    console.log('📄 Getting MCP server details from Q Developer CLI config:', name);
     
-    const { spawn } = await import('child_process');
+    const config = await readMcpConfig();
     
-    const process = spawn('claude', ['mcp', 'get', '-s', 'user', name], {
-      stdio: ['pipe', 'pipe', 'pipe']
-    });
+    if (!config.mcpServers || !config.mcpServers[name]) {
+      return res.status(404).json({ error: `MCP server "${name}" not found` });
+    }
     
-    let stdout = '';
-    let stderr = '';
+    const serverConfig = config.mcpServers[name];
+    const server = {
+      name,
+      type: serverConfig.command ? 'stdio' : 'sse',
+      command: serverConfig.command,
+      args: serverConfig.args || [],
+      url: serverConfig.url,
+      headers: serverConfig.headers || {},
+      env: serverConfig.env || {},
+      enabled: serverConfig.enabled !== false
+    };
     
-    process.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-    
-    process.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-    
-    process.on('close', (code) => {
-      if (code === 0) {
-        res.json({ success: true, output: stdout, server: parseClaudeGetOutput(stdout) });
-      } else {
-        console.error('Claude CLI error:', stderr);
-        res.status(404).json({ error: 'Claude CLI command failed', details: stderr });
-      }
-    });
-    
-    process.on('error', (error) => {
-      console.error('Error running Claude CLI:', error);
-      res.status(500).json({ error: 'Failed to run Claude CLI', details: error.message });
+    console.log('✅ MCP server details retrieved:', name);
+    res.json({ 
+      success: true, 
+      server
     });
   } catch (error) {
-    console.error('Error getting MCP server details via CLI:', error);
+    console.error('Error getting MCP server details:', error);
     res.status(500).json({ error: 'Failed to get MCP server details', details: error.message });
   }
 });
 
-// Helper functions to parse Claude CLI output
-function parseClaudeListOutput(output) {
-  // Parse the output from 'claude mcp list' command
-  // Format: "name: command/url" or "name: url (TYPE)"
-  const servers = [];
-  const lines = output.split('\n').filter(line => line.trim());
-  
-  for (const line of lines) {
-    if (line.includes(':')) {
-      const colonIndex = line.indexOf(':');
-      const name = line.substring(0, colonIndex).trim();
-      const rest = line.substring(colonIndex + 1).trim();
-      
-      let type = 'stdio'; // default type
-      
-      // Check if it has transport type in parentheses like "(SSE)" or "(HTTP)"
-      const typeMatch = rest.match(/\((\w+)\)\s*$/);
-      if (typeMatch) {
-        type = typeMatch[1].toLowerCase();
-      } else if (rest.startsWith('http://') || rest.startsWith('https://')) {
-        // If it's a URL but no explicit type, assume HTTP
-        type = 'http';
-      }
-      
-      if (name) {
-        servers.push({
-          name,
-          type,
-          status: 'active'
-        });
-      }
-    }
-  }
-  
-  console.log('🔍 Parsed Claude CLI servers:', servers);
-  return servers;
-}
-
-function parseClaudeGetOutput(output) {
-  // Parse the output from 'claude mcp get <name>' command
-  // This is a simple parser - might need adjustment based on actual output format
+// POST /api/mcp/toggle/:name - Toggle MCP server enabled/disabled state
+router.post('/toggle/:name', async (req, res) => {
   try {
-    // Try to extract JSON if present
-    const jsonMatch = output.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
+    const { name } = req.params;
+    const { enabled } = req.body;
+    
+    console.log('🔄 Toggling MCP server state:', name, 'enabled:', enabled);
+    
+    const config = await readMcpConfig();
+    
+    if (!config.mcpServers || !config.mcpServers[name]) {
+      return res.status(404).json({ error: `MCP server "${name}" not found` });
     }
     
-    // Otherwise, parse as text
-    const server = { raw_output: output };
-    const lines = output.split('\n');
+    config.mcpServers[name].enabled = enabled;
     
-    for (const line of lines) {
-      if (line.includes('Name:')) {
-        server.name = line.split(':')[1]?.trim();
-      } else if (line.includes('Type:')) {
-        server.type = line.split(':')[1]?.trim();
-      } else if (line.includes('Command:')) {
-        server.command = line.split(':')[1]?.trim();
-      } else if (line.includes('URL:')) {
-        server.url = line.split(':')[1]?.trim();
-      }
-    }
+    await writeMcpConfig(config);
     
-    return server;
+    console.log('✅ MCP server state toggled successfully:', name);
+    res.json({ 
+      success: true, 
+      message: `MCP server "${name}" ${enabled ? 'enabled' : 'disabled'} successfully`,
+      enabled
+    });
   } catch (error) {
-    return { raw_output: output, parse_error: error.message };
+    console.error('Error toggling MCP server state:', error);
+    res.status(500).json({ error: 'Failed to toggle MCP server state', details: error.message });
   }
-}
+});
+
+// GET /api/mcp/config - Get raw MCP configuration file
+router.get('/config', async (req, res) => {
+  try {
+    console.log('📄 Getting raw MCP configuration');
+    
+    const config = await readMcpConfig();
+    
+    res.json({ 
+      success: true, 
+      config,
+      configPath: getMcpConfigPath()
+    });
+  } catch (error) {
+    console.error('Error getting MCP config:', error);
+    res.status(500).json({ error: 'Failed to get MCP configuration', details: error.message });
+  }
+});
+
+// POST /api/mcp/config - Update raw MCP configuration file
+router.post('/config', async (req, res) => {
+  try {
+    const { config } = req.body;
+    
+    if (!config || typeof config !== 'object') {
+      return res.status(400).json({ error: 'Valid configuration object is required' });
+    }
+    
+    console.log('💾 Updating raw MCP configuration');
+    
+    await writeMcpConfig(config);
+    
+    console.log('✅ MCP configuration updated successfully');
+    res.json({ 
+      success: true, 
+      message: 'MCP configuration updated successfully',
+      config
+    });
+  } catch (error) {
+    console.error('Error updating MCP config:', error);
+    res.status(500).json({ error: 'Failed to update MCP configuration', details: error.message });
+  }
+});
 
 export default router;
