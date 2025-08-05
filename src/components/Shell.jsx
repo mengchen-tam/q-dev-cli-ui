@@ -395,30 +395,16 @@ function Shell({ selectedProject, selectedSession, isActive }) {
         console.log('Could not check auth status:', error);
       }
       
-      // Fetch server configuration to get the correct WebSocket URL
+      // Build WebSocket URL directly based on current location
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
       let wsBaseUrl;
-      try {
-        const headers = {};
-        if (token) {
-          headers['Authorization'] = `Bearer ${token}`;
-        }
-        
-        const configResponse = await fetch('/api/config', { headers });
-        const config = await configResponse.json();
-        wsBaseUrl = config.wsUrl;
-        
-        // If the config returns localhost but we're not on localhost, use current host but with API server port
-        if (wsBaseUrl.includes('localhost') && !window.location.hostname.includes('localhost')) {
-          const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-          // For development, API server is typically on port 3002 when Vite is on 3001
-          const apiPort = window.location.port === '3001' ? '3002' : window.location.port;
-          wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
-        }
-      } catch (error) {
-        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        // For development, API server is typically on port 3002 when Vite is on 3001
-        const apiPort = window.location.port === '3001' ? '3002' : window.location.port;
-        wsBaseUrl = `${protocol}//${window.location.hostname}:${apiPort}`;
+      
+      // For development: Vite runs on 3000, API server on 3001
+      if (window.location.port === '3000') {
+        wsBaseUrl = `${protocol}//${window.location.hostname}:3001`;
+      } else {
+        // For production or other configurations, use same host and port
+        wsBaseUrl = `${protocol}//${window.location.host}`;
       }
       
       // Include token in WebSocket URL as query parameter (if available and auth not disabled)
